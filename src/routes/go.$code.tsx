@@ -1,4 +1,4 @@
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, notFound } from "@tanstack/react-router";
 import { useState } from "react";
 import {
   Lock,
@@ -30,9 +30,27 @@ export const Route = createFileRoute("/go/$code")({
       });
     }
 
+    if (res.status === "missing") {
+      throw notFound();
+    }
+
     // 2. Non-redirect states return data to render appropriate UI Shell
     return res;
   },
+  notFoundComponent: () => (
+    <Shell
+      icon={<ExternalLink className="h-10 w-10 text-muted-foreground" />}
+      title="Link not found"
+    >
+      <p className="max-w-md text-sm text-muted-foreground">
+        We couldn't find a short link matching this URL code. Check the spelling or create a new
+        one.
+      </p>
+      <Link to="/$slug" params={{ slug: "link-shortener" }} className="btn-primary">
+        Make your own short link
+      </Link>
+    </Shell>
+  ),
   server: {
     handlers: {
       POST: async ({ request, params }: { request: Request; params: { code: string } }) => {
