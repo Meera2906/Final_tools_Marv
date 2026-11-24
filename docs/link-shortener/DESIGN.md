@@ -510,6 +510,13 @@ During Step 0, two concrete redirect architectures were analyzed in the installe
 
 **Recommendation:** Use **Approach A (`loader → throw redirect()`) for v1**. It cleanly unifies redirect decisions, password forms, and error states in a single route definition without requiring artificial delegation back into React rendering. Approach B is documented as an optimization path if microsecond redirect benchmarks warrant it.
 
+> [!NOTE]
+> **Verified Working Pattern in TanStack Start 1.168:**
+> Inspection of `@tanstack/react-start/server` and `@tanstack/start-server-core` verified the following end-to-end mechanism:
+> 1. In `loader`, active links await `register_click(p_code)` and throw `redirect({ href: url, statusCode: 302, headers })`, producing an immediate HTTP 302 with Location and no-store headers.
+> 2. For non-redirect fallback states (404 Not Found, 410 Expired/Disabled/Blocked, 429 Rate Limited), the server executes `setResponseStatus(code)` and `setResponseHeader(name, value)` before rendering HTML.
+> 3. Native POST requests on `/go/:code` (password unlock and interstitial continue) are intercepted by `server.handlers.POST`, which validates request origin/Sec-Fetch-Site, performs authentication/revalidation, awaits `register_click(p_code)`, and returns `new Response(null, { status: 302, headers: { Location: url, ... } })`.
+
 ### 8.2 Redirect Decision Matrix & Password + Review Interaction
 
 When a link is both **password-protected** and flagged as **`pending_review`**, authentication takes precedence to protect the destination URL from unauthorized disclosure, but the review warning is displayed prominently throughout:
