@@ -12,6 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SlugRouteImport } from './routes/$slug'
 import { Route as GoCodeRouteImport } from './routes/go.$code'
+import { Route as ApiAdminLinksBlockedDomainsRouteImport } from './routes/api.admin.links.blocked-domains'
+import { Route as ApiAdminLinksReportsRouteImport } from './routes/api.admin.links.reports'
+import { Route as ApiAdminLinksStatusRouteImport } from './routes/api.admin.links.status'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -28,35 +31,82 @@ const GoCodeRoute = GoCodeRouteImport.update({
   path: '/go/$code',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminLinksBlockedDomainsRoute =
+  ApiAdminLinksBlockedDomainsRouteImport.update({
+    id: '/api/admin/links/blocked-domains',
+    path: '/api/admin/links/blocked-domains',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiAdminLinksReportsRoute = ApiAdminLinksReportsRouteImport.update({
+  id: '/api/admin/links/reports',
+  path: '/api/admin/links/reports',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminLinksStatusRoute = ApiAdminLinksStatusRouteImport.update({
+  id: '/api/admin/links/status',
+  path: '/api/admin/links/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
   '/go/$code': typeof GoCodeRoute
+  '/api/admin/links/blocked-domains': typeof ApiAdminLinksBlockedDomainsRoute
+  '/api/admin/links/reports': typeof ApiAdminLinksReportsRoute
+  '/api/admin/links/status': typeof ApiAdminLinksStatusRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
   '/go/$code': typeof GoCodeRoute
+  '/api/admin/links/blocked-domains': typeof ApiAdminLinksBlockedDomainsRoute
+  '/api/admin/links/reports': typeof ApiAdminLinksReportsRoute
+  '/api/admin/links/status': typeof ApiAdminLinksStatusRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
   '/go/$code': typeof GoCodeRoute
+  '/api/admin/links/blocked-domains': typeof ApiAdminLinksBlockedDomainsRoute
+  '/api/admin/links/reports': typeof ApiAdminLinksReportsRoute
+  '/api/admin/links/status': typeof ApiAdminLinksStatusRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/$slug' | '/go/$code'
+  fullPaths:
+    | '/'
+    | '/$slug'
+    | '/go/$code'
+    | '/api/admin/links/blocked-domains'
+    | '/api/admin/links/reports'
+    | '/api/admin/links/status'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/$slug' | '/go/$code'
-  id: '__root__' | '/' | '/$slug' | '/go/$code'
+  to:
+    | '/'
+    | '/$slug'
+    | '/go/$code'
+    | '/api/admin/links/blocked-domains'
+    | '/api/admin/links/reports'
+    | '/api/admin/links/status'
+  id:
+    | '__root__'
+    | '/'
+    | '/$slug'
+    | '/go/$code'
+    | '/api/admin/links/blocked-domains'
+    | '/api/admin/links/reports'
+    | '/api/admin/links/status'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SlugRoute: typeof SlugRoute
   GoCodeRoute: typeof GoCodeRoute
+  ApiAdminLinksBlockedDomainsRoute: typeof ApiAdminLinksBlockedDomainsRoute
+  ApiAdminLinksReportsRoute: typeof ApiAdminLinksReportsRoute
+  ApiAdminLinksStatusRoute: typeof ApiAdminLinksStatusRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -82,6 +132,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GoCodeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/links/blocked-domains': {
+      id: '/api/admin/links/blocked-domains'
+      path: '/api/admin/links/blocked-domains'
+      fullPath: '/api/admin/links/blocked-domains'
+      preLoaderRoute: typeof ApiAdminLinksBlockedDomainsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/links/reports': {
+      id: '/api/admin/links/reports'
+      path: '/api/admin/links/reports'
+      fullPath: '/api/admin/links/reports'
+      preLoaderRoute: typeof ApiAdminLinksReportsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/links/status': {
+      id: '/api/admin/links/status'
+      path: '/api/admin/links/status'
+      fullPath: '/api/admin/links/status'
+      preLoaderRoute: typeof ApiAdminLinksStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -89,6 +160,9 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SlugRoute: SlugRoute,
   GoCodeRoute: GoCodeRoute,
+  ApiAdminLinksBlockedDomainsRoute: ApiAdminLinksBlockedDomainsRoute,
+  ApiAdminLinksReportsRoute: ApiAdminLinksReportsRoute,
+  ApiAdminLinksStatusRoute: ApiAdminLinksStatusRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
