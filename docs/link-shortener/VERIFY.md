@@ -241,3 +241,179 @@ curl -i http://localhost:3000/go/<ANY_CODE>
 ```http
 Set-Cookie: __Host-mrv_rep=...; Path=/; Max-Age=7200; HttpOnly; Secure; SameSite=Lax
 ```
+
+---
+
+## 3. Administrative Moderation API (Stage 5)
+
+All admin endpoints run on dedicated server HTTP route handlers under `/api/admin/links/*`. They are strictly machine-to-machine, protected by the `x-admin-api-key` header, and return `Cache-Control: no-store` on all responses.
+
+Set the admin API key environment variable in your terminal session for testing:
+
+```bash
+export ADMIN_API_KEY="your-local-test-admin-key"
+```
+
+---
+
+### Scenario 10: Unauthorized Request (Missing / Incorrect Key)
+
+Verify that missing or incorrect API keys return HTTP 401 with generic error message.
+
+```bash
+# Missing key
+curl -i http://localhost:3000/api/admin/links/reports
+
+# Wrong key
+curl -i http://localhost:3000/api/admin/links/reports \
+  -H "x-admin-api-key: invalid-key"
+```
+
+**Expected Response:**
+
+```http
+HTTP/1.1 401 Unauthorized
+Content-Type: application/json; charset=utf-8
+Cache-Control: no-store
+
+{"error":{"code":"unauthorized","message":"Missing or invalid admin API key."}}
+```
+
+---
+
+### Scenario 11: List Abuse Reports (`GET /api/admin/links/reports`)
+
+List abuse reports with optional status filtering and pagination (limit clamped to 100).
+
+```bash
+# List all reports (default 50)
+curl -i http://localhost:3000/api/admin/links/reports \
+  -H "x-admin-api-key: $ADMIN_API_KEY"
+
+# Filter by open status with pagination
+curl -i "http://localhost:3000/api/admin/links/reports?status=open&limit=20&offset=0" \
+  -H "x-admin-api-key: $ADMIN_API_KEY"
+```
+
+**Expected Response:**
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+Cache-Control: no-store
+
+{
+  "data": [
+    {
+      "id": "11111111-2222-3333-4444-555555555555",
+      "code": "suspicious-slug",
+      "reason": "phishing",
+      "details": "Lookalike login portal",
+      "status": "open",
+      "is_unverified": false,
+      "created_at": "2026-11-24T12:00:00.000Z"
+    }
+  ],
+  "count": 1,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+---
+
+### Scenario 12: Review/Resolve an Abuse Report (`PATCH /api/admin/links/reports`)
+
+Transition an abuse report's moderation status to `reviewed`, `actioned`, or `dismissed`.
+
+```bash
+curl -i -X PATCH http://localhost:3000/api/admin/links/reports \
+  -H "x-admin-api-key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reportId": "11111111-2222-3333-4444-555555555555",
+    "status": "reviewed"
+  }'
+```
+
+**Expected Response:**
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+Cache-Control: no-store
+
+{"ok":true,"reportId":"11111111-2222-3333-4444-555555555555","status":"reviewed"}
+```
+
+---
+
+### Scenario 13: Update Link Status & Restore (`POST /api/admin/links/status`)
+
+Change a link's moderation status. When restoring to `active`, the database runs `admin_restore_link()` to transactionally reset status and resolve open reports.
+
+```bash
+# Block a link and add its domain to the global blocklist
+curl -i -X POST http://localhost:3000/api/admin/links/status \
+  -H "x-admin-api-key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "suspicious-slug",
+    "status": "blocked",
+    "addDomain": true
+  }'
+
+# Restore a flagged or blocked link back to active
+curl -i -X POST http://localhost:3000/api/admin/links/status \
+  -H "x-admin-api-key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "suspicious-slug",
+    "status": "active"
+  }'
+```
+
+**Expected Response:**
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+Cache-Control: no-store
+
+{"ok":true,"code":"suspicious-slug","status":"active"}
+```
+
+---
+
+### Scenario 14: Manage Blocked Domains (`/api/admin/links/blocked-domains`)
+
+Add, remove, and inspect domains in the global target blocklist.
+
+```bash
+# Add a blocked domain
+curl -i -X POST http://localhost:3000/api/admin/links/blocked-domains \
+  -H "x-admin-api-key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "domain": "phishing-gang.net",
+    "source": "admin_investigation"
+  }'
+
+# List blocked domains
+curl -i http://localhost:3000/api/admin/links/blocked-domains \
+  -H "x-admin-api-key: $ADMIN_API_KEY"
+
+# Remove a blocked domain
+curl -i -X DELETE "http://localhost:3000/api/admin/links/blocked-domains?domain=phishing-gang.net" \
+  -H "x-admin-api-key: $ADMIN_API_KEY"
+```
+
+**Expected Response (Add):**
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+Cache-Control: no-store
+
+{"ok":true,"domain":"phishing-gang.net","source":"admin_investigation"}
+```

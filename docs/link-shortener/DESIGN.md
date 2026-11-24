@@ -40,6 +40,7 @@ Marvedge Tools (`Final_tools_Marv`) already provides a functional link shortener
 Task **T-00033** hardens and extends this existing service. The service is evolved in-place to introduce real HTTP 302 redirects, robust validation, redirect-target safety, domain reputation checks, modular fixed-window rate limiting, creator-scoped token management, and public reporting with admin moderation.
 
 ### Confirmed In-Scope Features
+
 - **Creator-based link management:** High-entropy token-based authentication allowing creators to view stats and disable or modify their links without requiring user registration.
 - **Link disabling:** Soft disabling by creators or administrative blocking.
 - **Public abuse reporting:** Abuse report submission with rate limiting, signed session fallback, and deduplication.
@@ -48,6 +49,7 @@ Task **T-00033** hardens and extends this existing service. The service is evolv
 - **Backward compatibility:** Existing password protection, expiry, custom slugs, and active links continue to operate seamlessly.
 
 ### Explicitly Out-of-Scope
+
 - **Demo Script Generator & AI Product Description tools:** These exist on separate tool pages (`demo-script-generator`, `product-description-generator`) and do not interface with the link shortener service. Confirmed out of scope for T-00033.
 - **Full user authentication system:** No user accounts, OAuth sign-ins, or session management are introduced for link creators in v1.
 - **Dedicated short vanity domain:** Short links remain at `${origin}/go/:code` for v1.
@@ -56,20 +58,21 @@ Task **T-00033** hardens and extends this existing service. The service is evolv
 
 ## 2. Glossary & Terminology Mapping
 
-| Task Vocabulary | Codebase & DB Name | Description |
-|-----------------|--------------------|-------------|
-| **Slug** | `code` | Unique path parameter in `/go/:code`. Pattern: `^[A-Za-z0-9_-]{3,40}$`. |
-| **Target URL** | `url` | The destination URL to which clients are redirected. Max 2048 characters. |
-| **Creator Token** | `creatorToken` / `creator_token_hash` | Secret 32-byte CSPRNG token (base64url). Database stores strictly `hex(SHA-256(rawBytes))`. |
-| **Status** | `status` | Link lifecycle state: `'active'`, `'disabled'`, `'blocked'`, `'pending_review'`. |
-| **Report Status** | `status` (in `link_reports`) | Moderation review state: `'open'`, `'reviewed'`, `'actioned'`, `'dismissed'`. |
-| **IP Hash** | `reporter_hash` / rate limit key | Salted hash `SHA-256(IP_HASH_SALT + client_ip)` or signed session identifier. Raw IPs are never persisted. |
+| Task Vocabulary   | Codebase & DB Name                    | Description                                                                                                |
+| ----------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Slug**          | `code`                                | Unique path parameter in `/go/:code`. Pattern: `^[A-Za-z0-9_-]{3,40}$`.                                    |
+| **Target URL**    | `url`                                 | The destination URL to which clients are redirected. Max 2048 characters.                                  |
+| **Creator Token** | `creatorToken` / `creator_token_hash` | Secret 32-byte CSPRNG token (base64url). Database stores strictly `hex(SHA-256(rawBytes))`.                |
+| **Status**        | `status`                              | Link lifecycle state: `'active'`, `'disabled'`, `'blocked'`, `'pending_review'`.                           |
+| **Report Status** | `status` (in `link_reports`)          | Moderation review state: `'open'`, `'reviewed'`, `'actioned'`, `'dismissed'`.                              |
+| **IP Hash**       | `reporter_hash` / rate limit key      | Salted hash `SHA-256(IP_HASH_SALT + client_ip)` or signed session identifier. Raw IPs are never persisted. |
 
 ---
 
 ## 3. Goals, Non-goals & Boundary Limits
 
 ### Architectural Goals
+
 1. **Real HTTP 302 Redirects:** Eliminate client-side JavaScript redirects (`window.location.replace`) across all navigation paths—initial clean hits, password unlocks, and interstitial continuations.
 2. **Reliable Datastore:** Keep Supabase PostgreSQL as the authoritative single source of truth.
 3. **Target URL Safety:** Validate destination URLs to prevent visitors from being redirected to private network endpoints, loopback addresses, or cloud metadata services.
@@ -78,6 +81,7 @@ Task **T-00033** hardens and extends this existing service. The service is evolv
 6. **Separation of Concerns:** Keep core link domain logic in pure TypeScript modules (`src/lib/links/`) free of browser or Vite-specific runtime globals to ensure standalone unit-testability.
 
 ### Non-goals
+
 - Introducing Redis, Upstash, or external caching infrastructure in v1.
 - Migrating the app or shortener to Next.js, Express, or standalone microservices.
 - Automated blocking or deletion of links without administrative review.
@@ -89,13 +93,16 @@ Task **T-00033** hardens and extends this existing service. The service is evolv
 A comprehensive repository inspection and baseline check conducted during Step 0 revealed the following state:
 
 ### Stack Architecture
+
 - **Framework:** TanStack Start 1.168.60 + TanStack Router 1.170.41 + React 19 + Vite 8.1.5 + Nitro (`NITRO_PRESET=netlify`).
 - **Database:** Supabase PostgreSQL managed via service role client (`src/integrations/supabase/client.server.ts`).
 - **Migrations:** Drizzle SQL files in `drizzle/migrations/` tracked by `drizzle/migrations/meta/_journal.json`. Existing initial migration: `0000_create_short_links.sql`.
 - **Global Middleware:** `src/start.ts` registers global CSRF protection (`createCsrfMiddleware`) filtering for server functions (`filter: (ctx) => ctx.handlerType === "serverFn"`).
 
 ### Pre-Existing Repository Baseline Issues
+
 The following failures exist on `main` / pristine baseline before any changes:
+
 1. **Linter (`npm run lint`):** Produces 23,450 Prettier errors (`Delete ␍`) due to Windows CRLF checkout versus repository-configured LF expectations.
 2. **Test Runner (`npm test`):** All 6 test suites crash on startup (`TypeError: Cannot read properties of undefined (reading 'config')`). Vitest runs in JSDOM where Vite virtual modules and TanStack Start runtime configs (`getStartOptions`, `import.meta.env.TSS_SERVER_FN_BASE`) are not injected.
 3. **Build (`npm run build`):** Fails during client rollup with 4 unresolved import errors in `pdf-lib/es/index.js` sub-paths due to Rolldown/Vite 8 module resolution.
@@ -104,6 +111,7 @@ The following failures exist on `main` / pristine baseline before any changes:
 > These issues represent pre-existing repository technical debt. T-00033 will **not** refactor unrelated tools or broad linter configs. All new code created in `src/lib/links/` must use LF line endings and be written as pure, decoupled modules to execute cleanly under unit tests.
 
 ### Vulnerability Analysis of Existing Link Shortener
+
 - **Client-Side Redirect:** `src/routes/go.$code.tsx` performs navigation via `window.location.replace(r.url)` inside a React loader/component, returning a 200 HTML page rather than an HTTP 302.
 - **Pseudo-Random Slugs:** Codes generated via `Math.random().toString(36).slice(2, 9)` without collision retries or cryptographic entropy.
 - **Timing Vulnerabilities:** Password comparison in `src/lib/links.functions.ts` uses JavaScript standard string equality (`!==`), exposing a timing side-channel.
@@ -171,6 +179,7 @@ CREATE INDEX IF NOT EXISTS short_links_target_host_idx ON public.short_links (ta
 ### 6.2 Supporting Tables
 
 #### `public.link_reports`
+
 Stores abuse reports submitted by users. `reporter_hash` is non-nullable to ensure the unique constraint deduplicates consistently without PostgreSQL `NULL` bypasses.
 
 ```sql
@@ -190,6 +199,7 @@ ALTER TABLE public.link_reports ENABLE ROW LEVEL SECURITY;
 ```
 
 #### `public.blocked_domains`
+
 Maintains blocked domains. Application logic performs suffix and exact matching.
 
 ```sql
@@ -209,6 +219,7 @@ ON CONFLICT (domain) DO NOTHING;
 ```
 
 #### `public.rate_limits`
+
 Fixed-window rate limit table keyed by action and hashed identifier.
 
 ```sql
@@ -228,6 +239,7 @@ ALTER TABLE public.rate_limits ENABLE ROW LEVEL SECURITY;
 All functions are declared `SECURITY DEFINER` and pin `search_path = public` to mitigate privilege escalation.
 
 #### `public.rate_limit_hit` — Fixed-Window Rate Limiter
+
 Validates parameters strictly and performs atomic increment and window accounting using epoch-aligned fixed windows.
 
 ```sql
@@ -281,6 +293,7 @@ GRANT EXECUTE ON FUNCTION public.rate_limit_hit(text, int, int) TO service_role;
 ```
 
 #### `public.register_click`
+
 Executes an atomic click count and updates `last_clicked_at`. Increments clicks for both `'active'` links and `'pending_review'` links (when a visitor proceeds past the interstitial).
 
 ```sql
@@ -300,6 +313,7 @@ GRANT EXECUTE ON FUNCTION public.register_click(text) TO service_role;
 ```
 
 #### `public.submit_link_report` — Atomic Locked Submission & Escalation
+
 Acquires an exclusive row lock on `short_links` to serialize report submission with concurrent moderation actions, recalculates open verified reports while holding the lock, and safely applies escalation.
 
 ```sql
@@ -360,6 +374,7 @@ GRANT EXECUTE ON FUNCTION public.submit_link_report(text, text, text, text) TO s
 ```
 
 #### `public.admin_restore_link` — Atomic Moderation Reset
+
 Acquires the exact same row lock on `short_links` before restoring status and clearing open reports, eliminating moderation race conditions.
 
 ```sql
@@ -397,6 +412,7 @@ GRANT EXECUTE ON FUNCTION public.admin_restore_link(text) TO service_role;
 ```
 
 #### `public.cleanup_rate_limits`
+
 Prunes expired rate limit records older than 2 hours.
 
 ```sql
@@ -423,6 +439,7 @@ GRANT EXECUTE ON FUNCTION public.cleanup_rate_limits() TO service_role;
 These are TanStack Start server functions (`createServerFn`) called from browser client components, protected by global CSRF middleware (`createCsrfMiddleware` in `src/start.ts`).
 
 #### `createShortLink`
+
 - **Method:** POST RPC (CSRF protected)
 - **Input:** `{ url: string, code?: string, password?: string, expiresAt?: string }`
 - **Output:**
@@ -430,6 +447,7 @@ These are TanStack Start server functions (`createServerFn`) called from browser
   - Error: `{ ok: false, error: "taken" | "reserved" | "invalid_url" | "blocked_domain" | "rate_limited" | "server_error", retryAfter?: number }`
 
 #### `resolveShortLink`
+
 - **Method:** POST RPC (CSRF protected)
 - **Input:** `{ code: string, password?: string }`
 - **Output:**
@@ -445,6 +463,7 @@ These are TanStack Start server functions (`createServerFn`) called from browser
   - `{ status: "rate_limited", retryAfter: number }`
 
 #### `getLinkInfo`
+
 - **Method:** POST RPC (CSRF protected)
 - **Input:** `{ code: string, creatorToken: string }`
 - **Output:**
@@ -452,14 +471,17 @@ These are TanStack Start server functions (`createServerFn`) called from browser
   - Error: `{ ok: false, error: "not_found" | "unauthorized" | "rate_limited" }`
 
 #### `updateLink`
+
 - **Method:** POST RPC (CSRF protected)
 - **Input:** `{ code: string, creatorToken: string, expiresAt?: string | null, status?: "active" | "disabled", password?: string | null }`
 - **Output:** `{ ok: true } | { ok: false, error: "not_found" | "unauthorized" | "rate_limited" | "server_error" }`
 
 #### `disableLink`
+
 - Convenience wrapper over `updateLink({ status: "disabled" })`.
 
 #### `reportLink`
+
 - **Method:** POST RPC (CSRF protected)
 - **Input:** `{ code: string, reason: "phishing" | "malware" | "spam" | "illegal" | "other", details?: string }`
 - **Output:** `{ ok: true, alreadyReported?: boolean } | { ok: false, error: "not_found" | "rate_limited" | "unverified_client" }`
@@ -475,13 +497,16 @@ These are TanStack Start server functions (`createServerFn`) called from browser
 > To avoid CSRF token mismatches on external CLI/curl/backend automation calls, **admin moderation operations are implemented as dedicated server HTTP route handlers under `/api/admin/links/*`**, NOT as browser-callable `createServerFn` RPCs.
 >
 > **Authentication & Hygiene Rules:**
+>
 > 1. Gated strictly by `x-admin-api-key` header verified via `crypto.timingSafeEqual` against the server-only `ADMIN_API_KEY` environment variable.
 > 2. `ADMIN_API_KEY` is strictly server-to-server. It is **never** prefixed with `VITE_` or included in frontend client bundles.
 > 3. Browser frontend components must never prompt for, store, or transmit `ADMIN_API_KEY`.
 > 4. Any future administrative web dashboard must run behind a user session authentication guard (e.g., Supabase Auth with admin role claims verified via server middleware) that proxies moderation actions on the server, rather than transmitting a shared secret from browser JS.
 
 #### Route Structure in TanStack Start
+
 The dedicated admin HTTP routes are defined in the file-based route tree:
+
 - **`src/routes/api.admin.links.reports.ts`:**
   - `GET`: Lists paginated reports (`status`, `limit`, `offset`).
   - `PATCH`: Updates an abuse report's status (`reportId`, `status: "reviewed" | "actioned" | "dismissed"`).
@@ -500,19 +525,20 @@ All handlers define `createFileRoute(...)({ server: { handlers: { ... } } })` an
 
 During Step 0, two concrete redirect architectures were analyzed in the installed TanStack Start package:
 
-| Criteria | Approach A: `loader → throw redirect()` (Recommended v1) | Approach B: `server.handlers.GET` |
-|----------|---------------------------------------------------------|-----------------------------------|
-| **Location** | Defined inside `createFileRoute("/go/$code")({ loader })` | Defined inside `createFileRoute("/go/$code")({ server: { handlers: { GET } } })` |
-| **Response** | Throws `redirect({ href, statusCode: 302, headers })` caught by TanStack SSR handler | Returns standard `Response(null, { status: 302, headers })` |
+| Criteria           | Approach A: `loader → throw redirect()` (Recommended v1)                             | Approach B: `server.handlers.GET`                                                                         |
+| ------------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| **Location**       | Defined inside `createFileRoute("/go/$code")({ loader })`                            | Defined inside `createFileRoute("/go/$code")({ server: { handlers: { GET } } })`                          |
+| **Response**       | Throws `redirect({ href, statusCode: 302, headers })` caught by TanStack SSR handler | Returns standard `Response(null, { status: 302, headers })`                                               |
 | **UI Integration** | Seamlessly coexists with Route Component rendering password form, 410, and 404 pages | Bypasses SSR lifecycle entirely; requires explicit routing logic to hand over non-redirect paths to React |
-| **Latency** | Single SSR lifecycle execution | Marginally lower (skips Router SSR instantiation on clean 302) |
-| **Availability** | Confirmed available and functional in v1.168.60 | Confirmed available in `serverRoute.d.ts` in v1.168.60 |
+| **Latency**        | Single SSR lifecycle execution                                                       | Marginally lower (skips Router SSR instantiation on clean 302)                                            |
+| **Availability**   | Confirmed available and functional in v1.168.60                                      | Confirmed available in `serverRoute.d.ts` in v1.168.60                                                    |
 
 **Recommendation:** Use **Approach A (`loader → throw redirect()`) for v1**. It cleanly unifies redirect decisions, password forms, and error states in a single route definition without requiring artificial delegation back into React rendering. Approach B is documented as an optimization path if microsecond redirect benchmarks warrant it.
 
 > [!NOTE]
 > **Verified Working Pattern in TanStack Start 1.168:**
 > Inspection of `@tanstack/react-start/server` and `@tanstack/start-server-core` verified the following end-to-end mechanism:
+>
 > 1. In `loader`, active links await `register_click(p_code)` and throw `redirect({ href: url, statusCode: 302, headers })`, producing an immediate HTTP 302 with Location and no-store headers.
 > 2. For non-redirect fallback states (404 Not Found, 410 Expired/Disabled/Blocked, 429 Rate Limited), the server executes `setResponseStatus(code)` and `setResponseHeader(name, value)` before rendering HTML.
 > 3. Native POST requests on `/go/:code` (password unlock and interstitial continue) are intercepted by `server.handlers.POST`, which validates request origin/Sec-Fetch-Site, performs authentication/revalidation, awaits `register_click(p_code)`, and returns `new Response(null, { status: 302, headers: { Location: url, ... } })`.
@@ -549,22 +575,24 @@ Is password required?
                Server emits HTTP 302 Redirect Response (Location: {url})
 ```
 
-| Link State | Initial GET HTTP Status | Form POST Action & Server Redirect Flow |
-|------------|-------------------------|-----------------------------------------|
-| `active`, unexpired, no password | **302** | Initial GET awaits `register_click(code)` → returns HTTP 302 `Location: target`. |
-| `active`, unexpired, password set | **200** | Renders unlock form. Password submission POSTs to `/go/:code` → server validates password in constant time → awaits `register_click(code)` → returns server **HTTP 302** `Location: target`. |
-| Password submitted & incorrect | **200** | Form re-renders with inline error message (rate-limited). |
-| `pending_review` (unprotected) | **200** | Interstitial warning page. Continue button POSTs to `/go/:code` → server revalidates link → awaits `register_click(code)` → returns server **HTTP 302** `Location: target`. |
-| `pending_review` + password | **200** | Renders password form with warning badge (no URL disclosed). Valid password POST renders destination interstitial → Continue POST awaits `register_click(code)` → returns server **HTTP 302**. |
-| `expired` (`expires_at < now()`) | **410** | Gone page: "This short link has expired." |
-| `disabled` | **410** | Gone page: "This link has been disabled by its creator." |
-| `blocked` | **410** | Gone page: "This link has been removed due to policy violations." |
-| Code not found in database | **404** | Not Found page. |
-| Rate limit exceeded | **429** | Error page with `Retry-After` header. |
-| Target domain in blocklist | **410** | Gone page (blocked on access). |
+| Link State                        | Initial GET HTTP Status | Form POST Action & Server Redirect Flow                                                                                                                                                        |
+| --------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `active`, unexpired, no password  | **302**                 | Initial GET awaits `register_click(code)` → returns HTTP 302 `Location: target`.                                                                                                               |
+| `active`, unexpired, password set | **200**                 | Renders unlock form. Password submission POSTs to `/go/:code` → server validates password in constant time → awaits `register_click(code)` → returns server **HTTP 302** `Location: target`.   |
+| Password submitted & incorrect    | **200**                 | Form re-renders with inline error message (rate-limited).                                                                                                                                      |
+| `pending_review` (unprotected)    | **200**                 | Interstitial warning page. Continue button POSTs to `/go/:code` → server revalidates link → awaits `register_click(code)` → returns server **HTTP 302** `Location: target`.                    |
+| `pending_review` + password       | **200**                 | Renders password form with warning badge (no URL disclosed). Valid password POST renders destination interstitial → Continue POST awaits `register_click(code)` → returns server **HTTP 302**. |
+| `expired` (`expires_at < now()`)  | **410**                 | Gone page: "This short link has expired."                                                                                                                                                      |
+| `disabled`                        | **410**                 | Gone page: "This link has been disabled by its creator."                                                                                                                                       |
+| `blocked`                         | **410**                 | Gone page: "This link has been removed due to policy violations."                                                                                                                              |
+| Code not found in database        | **404**                 | Not Found page.                                                                                                                                                                                |
+| Rate limit exceeded               | **429**                 | Error page with `Retry-After` header.                                                                                                                                                          |
+| Target domain in blocklist        | **410**                 | Gone page (blocked on access).                                                                                                                                                                 |
 
 ### 8.3 Zero Client-Side Navigation Guarantee
+
 In all redirect scenarios (initial clean hits, password unlocks, and interstitial continuations), **the client browser never executes `window.location.replace` or client-side navigation**. Every redirection is emitted directly by the server as an HTTP 302 response with headers:
+
 ```http
 HTTP/1.1 302 Found
 Location: https://destination.example.com/target
@@ -572,6 +600,7 @@ Cache-Control: no-store
 Referrer-Policy: no-referrer
 X-Robots-Tag: noindex
 ```
+
 This guarantees that preview bots, HTTP clients, and standard browsers receive native HTTP redirects while ensuring 100% click counting durability via awaited database updates.
 
 ---
@@ -581,17 +610,22 @@ This guarantees that preview bots, HTTP clients, and standard browsers receive n
 To prevent short links from colliding with system routes, existing tools, or critical assets, all slug assignments (custom or generated) must be checked against a reserved registry.
 
 ### 9.1 Composition of Reserved Set (`src/lib/links/reserved.ts`)
+
 The reserved slug set is composed dynamically at module initialization:
+
 1. **Static System Slugs:** `api`, `admin`, `login`, `logout`, `signup`, `auth`, `report`, `health`, `healthz`, `status`, `static`, `assets`, `favicon`, `robots`, `sitemap`, `well-known`, `about`, `terms`, `privacy`, `docs`, `help`, `support`, `www`, `app`, `dashboard`, `settings`, `go`, `unlock`, `blocked`, `expired`, `marvedge`, `new`, `null`, `undefined`, `_next`, `index`, `__root`.
 2. **Dynamic Tool Slugs:** Automatically mapped from `tools.map(t => t.slug)` in `src/lib/tools.ts` (19 existing tools).
 3. **Route & Asset Names:** File routes in `src/routes/` and static assets in `public/`.
 4. **Brand Impersonation List:** Minimal static list of lookalike deceptive terms (`paypa1`, `g00gle`, `amaz0n`, `app1e`).
 
 ### 9.2 Regression Unit Test
+
 A dedicated unit test (`src/test/links-reserved.test.ts`) validates that every tool slug in `tools.ts` is rejected by `isReservedSlug()`. If an engineer adds a tool to `tools.ts` in the future, the test enforces that the slug is protected against link hijacking.
 
 ### 9.3 Cryptographic Generation & Collision Retries
+
 Generated codes are 7 characters long using base62 (`[A-Za-z0-9]`), produced via `crypto.getRandomValues`. If a generated slug collides with an existing record or reserved term:
+
 - The system retries generation up to **5 times**.
 - If 5 consecutive collisions occur, it aborts cleanly with a `server_error`.
 
@@ -605,6 +639,7 @@ Generated codes are 7 characters long using base62 (`[A-Za-z0-9]`), produced via
 > **Safety Context:** The Marvedge server does not fetch or proxy target URLs; it merely returns HTTP 302 headers to user browsers. However, open redirects to private network addresses or cloud metadata endpoints can be weaponized against local intranets, home routers, and developer sandboxes. Target safety validation prevents Marvedge from serving as an open redirect vector into private network topologies.
 
 Validation pipeline executed on all URLs:
+
 1. **Length Check:** Maximum 2048 characters.
 2. **Whitespace & Control Characters:** Stripped and rejected if control codes exist.
 3. **WHATWG Parser:** URL must parse successfully via standard `new URL(url)`.
@@ -627,6 +662,7 @@ Validation pipeline executed on all URLs:
 ### 10.2 Trusted Client IP Extraction & Signed Session Cookie Policy (`src/lib/links/ip.server.ts`)
 
 #### Extraction Hierarchy & Trusted Proxy Guard
+
 1. **Netlify Edge IP Header:** `x-nf-client-connection-ip` is injected and sanitized at the Netlify edge. It is the authoritative, trusted source in production.
 2. **`x-forwarded-for` Guard:** `x-forwarded-for` is **only** inspected if Netlify headers are absent (e.g., local development). In production, arbitrary `x-forwarded-for` headers are treated as untrusted because untrusted clients can forge upstream IP headers.
 3. **Unverified Reporting Session Cookie Specification:**
@@ -648,6 +684,7 @@ Validation pipeline executed on all URLs:
      - **Auto-Escalation Safeguard:** Reports bearing `reporter_hash LIKE 'unverified:%'` are **strictly excluded** from the distinct reporter count threshold ($\ge 3$) required to automatically transition a link to `pending_review`. They appear only in the admin review queue for manual inspection.
 
 #### Salted IP Hashing
+
 Raw IP strings are never stored or logged. Salted SHA-256 is applied before keying:
 $$\text{ipHash} = \text{SHA-256}(\text{IP\_HASH\_SALT} + \text{clientIp})$$
 If `IP_HASH_SALT` is missing in production, the application throws a fatal configuration exception on startup.
@@ -670,7 +707,7 @@ If `IP_HASH_SALT` is missing in production, the application throws a fatal confi
 - **Storage in Database:** Stored in `short_links.creator_token_hash` strictly as `hex(SHA-256(rawBytes))`.
 - **Client Storage & XSS Threat Model:**
   - The client UI stores `{ code, creatorToken }` in browser `localStorage` to allow creators to revisit `/link-shortener` and manage their active links across sessions.
-  - *Threat Trade-off:* Data in `localStorage` is accessible to JavaScript executing on the same origin. A cross-site scripting (XSS) vulnerability on the domain could allow token extraction. Because Marvedge Tools is a client-side utility suite with a strict Content Security Policy, zero user-generated HTML rendering, and no third-party ad tags, this risk is acceptable for v1 to avoid the complexity of full user accounts, email verification, and session cookies.
+  - _Threat Trade-off:_ Data in `localStorage` is accessible to JavaScript executing on the same origin. A cross-site scripting (XSS) vulnerability on the domain could allow token extraction. Because Marvedge Tools is a client-side utility suite with a strict Content Security Policy, zero user-generated HTML rendering, and no third-party ad tags, this risk is acceptable for v1 to avoid the complexity of full user accounts, email verification, and session cookies.
 - **Verification Workflow:**
   1. Incoming `creatorToken` base64url string is decoded into its original 32 raw bytes (`Uint8Array(32)`).
   2. Compute `hex(SHA-256(rawBytes))`.
@@ -685,14 +722,16 @@ If `IP_HASH_SALT` is missing in production, the application throws a fatal confi
 
 ### Evaluation Summary
 
-| Architecture | Operational Complexity | Cost | Latency (p95) | ACID / Integrity |
-|--------------|------------------------|------|---------------|------------------|
-| **Supabase PostgreSQL (v1 Choice)** | Low (existing) | Free tier included | ~50–120ms | Full (PK constraints, atomic functions) |
-| Postgres + Upstash / Redis | High (dual data sync) | Additional tier | ~20–40ms | Eventual (requires cache invalidation) |
-| Netlify Blobs / KV | Medium | Platform-bound | ~30–60ms | Weak (no relational integrity or atomic increments) |
+| Architecture                        | Operational Complexity | Cost               | Latency (p95) | ACID / Integrity                                    |
+| ----------------------------------- | ---------------------- | ------------------ | ------------- | --------------------------------------------------- |
+| **Supabase PostgreSQL (v1 Choice)** | Low (existing)         | Free tier included | ~50–120ms     | Full (PK constraints, atomic functions)             |
+| Postgres + Upstash / Redis          | High (dual data sync)  | Additional tier    | ~20–40ms      | Eventual (requires cache invalidation)              |
+| Netlify Blobs / KV                  | Medium                 | Platform-bound     | ~30–60ms      | Weak (no relational integrity or atomic increments) |
 
 ### Explicit Triggers for Adding a Cache Layer (v2)
+
 A caching layer (Redis / Upstash) will only be introduced if at least one of the following concrete thresholds is breached in production:
+
 1. Measured redirect resolution p95 latency exceeds **300ms** over a sustained 7-day period.
 2. Redirect traffic exceeds **500 requests per minute**, causing PostgreSQL connection exhaustion.
 3. Supabase free-tier egress or CPU limits reach 80% capacity.
@@ -704,12 +743,15 @@ A caching layer (Redis / Upstash) will only be introduced if at least one of the
 **Decision:** Implement the redirect using the **TanStack Start route loader** (`throw redirect({ href, statusCode: 302 })`) hosted on the **Netlify SSR Function** (`/.netlify/functions/server`) for v1.
 
 ### Technical Analysis
+
 - TanStack Start routes all server functions and loaders through Nitro on Netlify.
 - Step 0 verified that returning/throwing a redirect from `src/routes/go.$code.tsx` causes the SSR engine to short-circuit HTML rendering and emit an immediate HTTP 302 response with custom headers.
 - While `route.server.handlers.GET` is confirmed to exist in `@tanstack/start-client-core`, using the `loader` pattern provides seamless fallback to React-rendered views (password unlock forms, 410 Gone notices, 404 Not Found) without manual stream/response splitting.
 
 ### Long-Term Edge Migration Path (v2 Scale Path)
+
 If sub-30ms global redirect latency is required in the future:
+
 1. Deploy a lightweight **Netlify Edge Function** mounted at `/go/*`.
 2. Query Supabase directly via lightweight edge fetch.
 3. If active and unprotected, emit an edge HTTP 302. If password-protected or errored, proxy through to the TanStack Start SSR function.
@@ -747,19 +789,19 @@ src/
 
 ## 14. Threat → Control → Test Matrix
 
-| Threat / Attack Vector | Security Control | Verification Test Suite |
-|------------------------|------------------|-------------------------|
-| Open redirect to private LAN / metadata | `url-policy.ts` rejects private, link-local, loopback & cloud metadata IPs | `src/test/links-url-policy.test.ts` |
-| Malicious schemes (`javascript:`, `data:`) | Strict whitelist (`http:`, `https:` only) | `src/test/links-url-policy.test.ts` |
-| Slug hijacking of tool pages | `reserved.ts` checks against `tools.ts` and static routes | `src/test/links-reserved.test.ts` |
-| Password hash timing side-channel | `crypto.timingSafeEqual` comparison | `src/test/links-password.test.ts` |
-| Click count undercounting under load | Awaited atomic PostgreSQL update via `register_click()` | `src/test/links-service.test.ts` |
-| Password brute-forcing | Rate limit: 5 attempts per 15 min per IP/code | `src/test/links-service.test.ts` |
-| Report flooding from single source | Deduplication via `(code, reporter_hash)` unique constraint | `src/test/links-service.test.ts` |
-| Disruption via false report brigades | Only open, verified reports count toward escalation; unverified IPs excluded | `src/test/links-service.test.ts` |
-| Unauthorized admin modification | Constant-time `ADMIN_API_KEY` verification on dedicated server HTTP routes | `src/test/links-service.test.ts` |
-| Creator token interception | Raw token never in build bundles; raw bytes decoded & SHA-256 hash stored | `src/test/links-token.test.ts` |
-| Moderation race condition | `admin_restore_link` and `submit_link_report` serialize on `short_links` row lock | `src/test/links-service.test.ts` |
+| Threat / Attack Vector                     | Security Control                                                                  | Verification Test Suite             |
+| ------------------------------------------ | --------------------------------------------------------------------------------- | ----------------------------------- |
+| Open redirect to private LAN / metadata    | `url-policy.ts` rejects private, link-local, loopback & cloud metadata IPs        | `src/test/links-url-policy.test.ts` |
+| Malicious schemes (`javascript:`, `data:`) | Strict whitelist (`http:`, `https:` only)                                         | `src/test/links-url-policy.test.ts` |
+| Slug hijacking of tool pages               | `reserved.ts` checks against `tools.ts` and static routes                         | `src/test/links-reserved.test.ts`   |
+| Password hash timing side-channel          | `crypto.timingSafeEqual` comparison                                               | `src/test/links-password.test.ts`   |
+| Click count undercounting under load       | Awaited atomic PostgreSQL update via `register_click()`                           | `src/test/links-service.test.ts`    |
+| Password brute-forcing                     | Rate limit: 5 attempts per 15 min per IP/code                                     | `src/test/links-service.test.ts`    |
+| Report flooding from single source         | Deduplication via `(code, reporter_hash)` unique constraint                       | `src/test/links-service.test.ts`    |
+| Disruption via false report brigades       | Only open, verified reports count toward escalation; unverified IPs excluded      | `src/test/links-service.test.ts`    |
+| Unauthorized admin modification            | Constant-time `ADMIN_API_KEY` verification on dedicated server HTTP routes        | `src/test/links-service.test.ts`    |
+| Creator token interception                 | Raw token never in build bundles; raw bytes decoded & SHA-256 hash stored         | `src/test/links-token.test.ts`      |
+| Moderation race condition                  | `admin_restore_link` and `submit_link_report` serialize on `short_links` row lock | `src/test/links-service.test.ts`    |
 
 ---
 
@@ -784,6 +826,7 @@ stateDiagram-v2
 ```
 
 ### Abuse Reports & Moderation Concurrency Lifecycle
+
 1. **Report Submission:** Handled by `submit_link_report(p_code, p_reason, p_details, p_reporter_hash)`.
    - Acquires `SELECT status FROM short_links WHERE code = p_code FOR UPDATE`.
    - Inserts the report with unique deduplication.
@@ -802,7 +845,9 @@ stateDiagram-v2
 ## 16. Observability, Telemetry & Privacy
 
 ### Structured Server Logs
+
 Logged events emit sanitized JSON without PII:
+
 - **`link_created`**: `{ code, target_host, has_password, has_expiry, status }`
 - **`redirect_resolved`**: `{ code, status, latency_ms }`
 - **`rate_limit_exceeded`**: `{ action, retry_after }`
@@ -816,6 +861,7 @@ Logged events emit sanitized JSON without PII:
 ## 17. Rollout & Rollback Strategy
 
 ### Rollout Steps
+
 1. **Apply SQL Migration `0001_harden_short_links.sql`:** Additive columns and new tables are created in Supabase PostgreSQL. Existing links receive `status = 'active'`.
 2. **Configure Environment Variables in Netlify:**
    - `ADMIN_API_KEY`: Strong random secret (`openssl rand -hex 32`).
@@ -831,6 +877,7 @@ Logged events emit sanitized JSON without PII:
    - Verify report submission, moderation resolution, and rate limit enforcement.
 
 ### Rollback Plan
+
 - Because the database migration is strictly additive, rolling back simply requires redeploying the previous application build in Netlify.
 - If the database schema must be rolled back, execute the rollback script in Supabase SQL editor **only after** the previous application build is live:
   ```sql
@@ -855,6 +902,7 @@ Logged events emit sanitized JSON without PII:
 ## 18. Confirmed Repository Facts vs Assumptions
 
 ### Confirmed Repository Facts
+
 - The repository is a TanStack Start 1.168.60 application deployed on Netlify, using React 19, Vite 8.1.5, and Supabase PostgreSQL.
 - Server functions run through Nitro's Netlify preset; `throw redirect(...)` inside a route loader emits a genuine HTTP 302 response to the client.
 - The `route.server.handlers.GET` API exists in the installed TanStack Start core package.
@@ -862,8 +910,56 @@ Logged events emit sanitized JSON without PII:
 - Demo Script and Product Description tools are independent pages and are confirmed out of scope.
 
 ### Assumptions Requiring Awareness
+
 - **Provisional Site URL:** `PUBLIC_SITE_URL` is provisionally assumed to be `https://marvedge.com` based on `MARVEDGE_URL` in `src/lib/tools.ts`. It remains configurable via environment variable.
 - **Client IP Header:** Assumed that incoming traffic on Netlify reliably provides `x-nf-client-connection-ip`. A safe signed-session cookie fallback is provided when absent.
+
+---
+
+## 19. Cleanup Scheduling Proposal: `cleanup_rate_limits()`
+
+Rate limit records older than 2 hours are pruned by `public.cleanup_rate_limits()`. Two scheduling mechanisms were evaluated:
+
+### Option A: Supabase `pg_cron` (Recommended for Database-Native Architecture)
+
+```sql
+-- Enable the pg_cron extension (Supabase Pro/Team or self-hosted)
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+-- Schedule hourly cleanup at minute 0
+SELECT cron.schedule(
+  'cleanup-rate-limits-hourly',
+  '0 * * * *',
+  'SELECT public.cleanup_rate_limits();'
+);
+```
+
+- **Pros:** Zero network latency, zero external credential exposure, internal to Postgres daemon, execution tracked in `cron.job_run_details`.
+- **Cons:** Requires `pg_cron` extension availability; on Supabase Free tier, inactive paused databases suspend local cron execution.
+
+### Option B: Netlify Scheduled Function (`netlify/functions/cleanup-rate-limits.ts`)
+
+```ts
+import { schedule } from "@netlify/functions";
+import { createClient } from "@supabase/supabase-js";
+
+export const handler = schedule("0 * * * *", async () => {
+  const supabase = createClient(
+    process.env["SUPABASE_URL"]!,
+    process.env["SUPABASE_SERVICE_ROLE_KEY"]!,
+  );
+  const { data, error } = await supabase.rpc("cleanup_rate_limits");
+  console.info(`[cleanup] pruned ${data} expired rate limit records`);
+  return { statusCode: error ? 500 : 200 };
+});
+```
+
+- **Pros:** Runs independently of database tier; works across all Netlify hosting setups.
+- **Cons:** Requires external network round-trip, service-role credential storage in serverless runtime, and consumes serverless function quotas.
+
+### Recommendation
+
+Adopt **Option A (`pg_cron`)** as the primary database-native approach. For deployment environments where `pg_cron` is unavailable or subject to project pausing, implement **Option B** as a turnkey alternative.
 
 ---
 
