@@ -1,9 +1,21 @@
 import { useEffect, useState } from "react";
 
-import { CalendarClock, ClipboardPaste, Link2, Loader2, QrCode, ShieldCheck, Sparkles } from "lucide-react";
+import {
+  CalendarClock,
+  ClipboardPaste,
+  Link2,
+  Loader2,
+  QrCode,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 import QRCode from "qrcode";
 import { createShortLink } from "@/lib/links.functions";
 import { CopyBtn, ErrorNote, Field, Panel, inputCls } from "./ui";
+import { formatLinkError } from "./link-shortener/links-ui-helpers";
+import { useCreatorLinks } from "./link-shortener/useCreatorLinks";
+import { CreatorTokenNotice } from "./link-shortener/CreatorTokenNotice";
+import { CreatorLinkManager } from "./link-shortener/CreatorLinkManager";
 
 const EXPIRY = [
   { label: "1 hour", h: 1 },
@@ -23,7 +35,12 @@ const OPTS: { id: Opt; label: string; Icon: typeof Link2 }[] = [
 
 export function LinkShortener() {
   const [url, setUrl] = useState("");
-  const [on, setOn] = useState<Record<Opt, boolean>>({ custom: false, password: false, expiry: false, qr: false });
+  const [on, setOn] = useState<Record<Opt, boolean>>({
+    custom: false,
+    password: false,
+    expiry: false,
+    qr: false,
+  });
   const [code, setCode] = useState("");
   const [pw, setPw] = useState("");
   const [exp, setExp] = useState(1);
@@ -32,19 +49,36 @@ export function LinkShortener() {
   const [err, setErr] = useState<string | null>(null);
   const [out, setOut] = useState<{ link: string; note: string } | null>(null);
   const [qr, setQr] = useState("");
+  const [latestNotice, setLatestNotice] = useState<{ token: string; code: string } | null>(null);
+
+  const { links, addLink, removeLink, updateStoredLink } = useCreatorLinks();
 
   useEffect(() => {
-    if (!out || !on.qr) { setQr(""); return; }
-    QRCode.toDataURL(out.link, { width: 320, margin: 1, color: { dark: "#000000", light: "#FFFFFF" } })
-      .then(setQr).catch(() => setQr(""));
+    if (!out || !on.qr) {
+      setQr("");
+      return;
+    }
+    QRCode.toDataURL(out.link, {
+      width: 320,
+      margin: 1,
+      color: { dark: "#000000", light: "#FFFFFF" },
+    })
+      .then(setQr)
+      .catch(() => setQr(""));
   }, [out, on.qr]);
 
   const paste = async () => {
-    try { setUrl((await navigator.clipboard.readText()).trim()); } catch { setErr("Your browser blocked pasting — press Ctrl+V in the box instead."); }
+    try {
+      setUrl((await navigator.clipboard.readText()).trim());
+    } catch {
+      setErr("Your browser blocked pasting — press Ctrl+V in the box instead.");
+    }
   };
 
   const go = async () => {
-    setErr(null); setOut(null);
+    setErr(null);
+    setOut(null);
+    setLatestNotice(null);
     let expiresAt: string | undefined;
     if (on.expiry) {
       const h = EXPIRY[exp]?.h ?? 0;
@@ -59,8 +93,17 @@ export function LinkShortener() {
     const password = on.password && pw ? pw : undefined;
     setBusy(true);
     try {
-      const r = await createShortLink({ data: { url: url.trim(), code: (on.custom && code.trim()) || undefined, password, expiresAt } });
-      if (!r.ok) return setErr(r.error);
+      const r = await createShortLink({
+        data: {
+          url: url.trim(),
+          code: (on.custom && code.trim()) || undefined,
+          password,
+          expiresAt,
+        },
+      });
+      if (!r.ok) {
+        return setErr(formatLinkError(r.error, r.retryAfter));
+      }
       const formattedExpiry = expiresAt
         ? `Expires ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(expiresAt))}`
         : "Never expires";
@@ -68,9 +111,20 @@ export function LinkShortener() {
         link: `${window.location.origin}/go/${r.code}`,
         note: [password && "Password protected", formattedExpiry].filter(Boolean).join(" · "),
       });
+      if (r.creatorToken) {
+        addLink({
+          code: r.code,
+          creatorToken: r.creatorToken,
+          url: url.trim(),
+          createdAt: new Date().toISOString(),
+        });
+        setLatestNotice({ token: r.creatorToken, code: r.code });
+      }
     } catch (e) {
-      setErr(e instanceof Error && e.message.includes("[") ? "Check the link and custom name (3–40 letters, numbers, - or _; password at least 4 characters)." : "Something went wrong.");
-    } finally { setBusy(false); }
+      setErr(formatLinkError(e instanceof Error ? e.message : "server_error"));
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -101,7 +155,11 @@ export function LinkShortener() {
           disabled={!url || busy}
           className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl bg-[#000000] px-7 py-3.5 text-sm font-semibold text-[#FFFFFF] shadow-sm transition-[background-color,transform] duration-150 hover:bg-[#1A1A1A] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7895B2] focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
         >
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Sparkles className="h-4 w-4" aria-hidden="true" />}
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Sparkles className="h-4 w-4" aria-hidden="true" />
+          )}
           {busy ? "Shortening…" : "Shorten Now"}
         </button>
       </div>
@@ -121,7 +179,9 @@ export function LinkShortener() {
           >
             <span
               className={`grid h-10 w-10 place-items-center rounded-xl transition-colors ${
-                on[id] ? "bg-[#000000] text-[#FFFFFF]" : "border border-[#D6CCB5] bg-[#FFFFFF] text-[#000000]"
+                on[id]
+                  ? "bg-[#000000] text-[#FFFFFF]"
+                  : "border border-[#D6CCB5] bg-[#FFFFFF] text-[#000000]"
               }`}
             >
               <Icon className="h-4 w-4" aria-hidden="true" />
@@ -165,7 +225,11 @@ export function LinkShortener() {
                 value={exp}
                 onChange={(e) => setExp(+e.target.value)}
               >
-                {EXPIRY.map((x, i) => <option key={x.label} value={i}>{x.label}</option>)}
+                {EXPIRY.map((x, i) => (
+                  <option key={x.label} value={i}>
+                    {x.label}
+                  </option>
+                ))}
               </select>
               {EXPIRY[exp]?.h === -1 && (
                 <input
@@ -189,7 +253,9 @@ export function LinkShortener() {
           className="flex flex-wrap items-center gap-5 rounded-2xl border border-[#D6CCB5] bg-[#FAF7F0] p-5 text-[#000000]"
         >
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-[#537190]">Short link ready</p>
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-[#537190]">
+              Short link ready
+            </p>
             <div className="mt-1.5 flex flex-wrap items-center gap-3">
               <a
                 href={out.link}
@@ -210,12 +276,35 @@ export function LinkShortener() {
               title="Download QR code"
               className="shrink-0 rounded-2xl border border-[#D6CCB5] bg-[#FFFFFF] p-3 text-center transition-colors hover:border-[#000000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7895B2]"
             >
-              <img src={qr} alt={`QR code for ${out.link}`} width={112} height={112} className="h-28 w-28 rounded-lg" />
-              <span className="mt-1.5 block text-[11px] font-semibold text-[#4A4740]">Download PNG</span>
+              <img
+                src={qr}
+                alt={`QR code for ${out.link}`}
+                width={112}
+                height={112}
+                className="h-28 w-28 rounded-lg"
+              />
+              <span className="mt-1.5 block text-[11px] font-semibold text-[#4A4740]">
+                Download PNG
+              </span>
             </a>
           )}
         </div>
       )}
+
+      {latestNotice && out && (
+        <CreatorTokenNotice
+          token={latestNotice.token}
+          code={latestNotice.code}
+          onDismiss={() => setLatestNotice(null)}
+        />
+      )}
+
+      <CreatorLinkManager
+        links={links}
+        onRemove={removeLink}
+        onAddManual={addLink}
+        onUpdateStored={updateStoredLink}
+      />
     </Panel>
   );
 }
