@@ -10,7 +10,15 @@ import { hashPassword, verifyPassword } from "./password";
 import { generateCreatorToken, verifyCreatorToken } from "./token";
 import { isBlockedHost, noopReputationProvider, type UrlReputationProvider } from "./blocklist";
 import { LIMITS, rateLimit, type RateLimitResult } from "./ratelimit.server";
-import { getClientIp, hashIp, getReporterIdentity, type ReporterIdentity } from "./ip.server";
+import {
+  getClientIp,
+  hashIp,
+  getReporterIdentity,
+  type ReporterIdentity,
+  issueReportingCookie,
+  verifyReportingCookie,
+} from "./ip.server";
+import { validatePostOrigin } from "./redirect-decision";
 
 export interface ServiceDeps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -39,6 +47,24 @@ async function resolveRequest(deps?: ServiceDeps): Promise<Request | undefined> 
     return getRequest();
   } catch {
     return undefined;
+  }
+}
+
+async function trySetResponseStatus(code: number): Promise<void> {
+  try {
+    const { setResponseStatus } = await import("@tanstack/react-start/server");
+    setResponseStatus(code);
+  } catch {
+    // Ignore in non-SSR / test environments
+  }
+}
+
+async function trySetResponseHeader(name: string, value: string): Promise<void> {
+  try {
+    const { setResponseHeader } = await import("@tanstack/react-start/server");
+    setResponseHeader(name, value);
+  } catch {
+    // Ignore in non-SSR / test environments
   }
 }
 
@@ -243,11 +269,22 @@ export async function resolveShortLinkService(
   const ip = req ? getClientIp(req) : null;
   const ipHash = ip ? hashIp(ip) : "anonymous";
 
+  if (!ip && req) {
+    const existingCookie = req.headers.get("cookie");
+    if (!verifyReportingCookie(existingCookie)) {
+      const { setCookie } = issueReportingCookie();
+      await trySetResponseHeader("Set-Cookie", setCookie);
+    }
+  }
+
   const rlRes = await rl(`resolve:${ipHash}`, LIMITS.resolve.windowSeconds, LIMITS.resolve.limit, {
     failClosed: false,
     db,
   });
   if (!rlRes.allowed) {
+    await trySetResponseStatus(429);
+    await trySetResponseHeader("Retry-After", String(rlRes.retryAfter));
+    await trySetResponseHeader("X-Robots-Tag", "noindex");
     return { status: "rate_limited", retryAfter: rlRes.retryAfter };
   }
 
@@ -259,19 +296,27 @@ export async function resolveShortLinkService(
     .maybeSingle();
 
   if (!row) {
+    await trySetResponseStatus(404);
+    await trySetResponseHeader("X-Robots-Tag", "noindex");
     return { status: "missing" };
   }
 
   // 3. Status checks
   if (row.status === "blocked") {
+    await trySetResponseStatus(410);
+    await trySetResponseHeader("X-Robots-Tag", "noindex");
     return { status: "blocked" };
   }
   if (row.status === "disabled") {
+    await trySetResponseStatus(410);
+    await trySetResponseHeader("X-Robots-Tag", "noindex");
     return { status: "disabled" };
   }
 
   // 4. Dynamic expiry check
   if (row.expires_at && new Date(row.expires_at) <= now) {
+    await trySetResponseStatus(410);
+    await trySetResponseHeader("X-Robots-Tag", "noindex");
     return { status: "expired" };
   }
 
@@ -282,6 +327,8 @@ export async function resolveShortLinkService(
       const blockedList = (blockedRows ?? []).map((r: { domain: string }) => r.domain);
       if (isBlockedHost(row.target_host, blockedList)) {
         await db.from("short_links").update({ status: "blocked" }).eq("code", input.code);
+        await trySetResponseStatus(410);
+        await trySetResponseHeader("X-Robots-Tag", "noindex");
         return { status: "blocked" };
       }
     } catch {
@@ -292,6 +339,7 @@ export async function resolveShortLinkService(
   // 6. Password handling
   if (row.password_hash) {
     if (!input.password) {
+      await trySetResponseHeader("X-Robots-Tag", "noindex");
       if (row.status === "pending_review") {
         return { status: "password_pending_review" };
       }
@@ -306,11 +354,15 @@ export async function resolveShortLinkService(
       { failClosed: true, db },
     );
     if (!rlPw.allowed) {
+      await trySetResponseStatus(429);
+      await trySetResponseHeader("Retry-After", String(rlPw.retryAfter));
+      await trySetResponseHeader("X-Robots-Tag", "noindex");
       return { status: "rate_limited", retryAfter: rlPw.retryAfter };
     }
 
     const pwRes = await verifyPassword(input.password, row.password_hash);
     if (!pwRes.ok) {
+      await trySetResponseHeader("X-Robots-Tag", "noindex");
       return { status: "wrong" };
     }
 
@@ -326,6 +378,7 @@ export async function resolveShortLinkService(
 
   // 7. Return destination or pending interstitial
   if (row.status === "pending_review") {
+    await trySetResponseHeader("X-Robots-Tag", "noindex");
     return { status: "pending_review", url: row.url };
   }
 
@@ -337,6 +390,150 @@ export async function resolveShortLinkService(
   }
 
   return { status: "ok", url: row.url };
+}
+
+// ---------------------------------------------------------------------------
+// 2b. handleGoPostService (Native form POST handler on /go/:code)
+// ---------------------------------------------------------------------------
+
+export async function handleGoPostService(
+  req: Request,
+  code: string,
+  deps?: ServiceDeps,
+): Promise<Response> {
+  const publicSiteUrl = process.env["PUBLIC_SITE_URL"];
+  if (!validatePostOrigin(req, publicSiteUrl)) {
+    return new Response("Forbidden: Cross-site request rejected", {
+      status: 403,
+      headers: { "X-Robots-Tag": "noindex" },
+    });
+  }
+
+  const formData = await req.formData();
+  const action = formData.get("action");
+
+  if (action === "continue") {
+    const db = await getAdminDb(deps);
+    const now = deps?.now ? deps.now() : new Date();
+
+    const { data: row } = await db.from("short_links").select("*").eq("code", code).maybeSingle();
+
+    if (!row) {
+      return new Response("Link not found", {
+        status: 404,
+        headers: { "X-Robots-Tag": "noindex" },
+      });
+    }
+
+    if (row.status === "blocked" || row.status === "disabled") {
+      return new Response("This link is no longer available", {
+        status: 410,
+        headers: { "X-Robots-Tag": "noindex" },
+      });
+    }
+
+    if (row.expires_at && new Date(row.expires_at) <= now) {
+      return new Response("This link has expired", {
+        status: 410,
+        headers: { "X-Robots-Tag": "noindex" },
+      });
+    }
+
+    if (row.target_host) {
+      try {
+        const { data: blockedRows } = await db.from("blocked_domains").select("domain");
+        const blockedList = (blockedRows ?? []).map((r: { domain: string }) => r.domain);
+        if (isBlockedHost(row.target_host, blockedList)) {
+          await db.from("short_links").update({ status: "blocked" }).eq("code", code);
+          return new Response("This link has been blocked", {
+            status: 410,
+            headers: { "X-Robots-Tag": "noindex" },
+          });
+        }
+      } catch {
+        // Proceed on DB error
+      }
+    }
+
+    try {
+      await db.rpc("register_click", { p_code: code });
+    } catch {
+      // Non-fatal
+    }
+
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: row.url,
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex",
+      },
+    });
+  }
+
+  if (action === "unlock") {
+    const password = String(formData.get("password") || "");
+    const res = await resolveShortLinkService({ code, password }, { ...deps, req });
+
+    if (res.status === "ok") {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: res.url,
+          "Cache-Control": "no-store",
+          "Referrer-Policy": "no-referrer",
+          "X-Robots-Tag": "noindex",
+        },
+      });
+    }
+
+    if (res.status === "pending_review") {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: `/go/${encodeURIComponent(code)}?unlocked=1`,
+          "Cache-Control": "no-store",
+          "Referrer-Policy": "no-referrer",
+          "X-Robots-Tag": "noindex",
+        },
+      });
+    }
+
+    if (res.status === "wrong") {
+      return new Response("Invalid password", {
+        status: 401,
+        headers: { "X-Robots-Tag": "noindex" },
+      });
+    }
+
+    if (res.status === "rate_limited") {
+      return new Response("Too many attempts. Please try again later.", {
+        status: 429,
+        headers: {
+          "Retry-After": String(res.retryAfter),
+          "X-Robots-Tag": "noindex",
+        },
+      });
+    }
+
+    if (res.status === "missing") {
+      return new Response("Link not found", {
+        status: 404,
+        headers: { "X-Robots-Tag": "noindex" },
+      });
+    }
+
+    return new Response("This link is no longer available", {
+      status: 410,
+      headers: { "X-Robots-Tag": "noindex" },
+    });
+  }
+
+  return new Response("Invalid request action", {
+    status: 400,
+    headers: { "X-Robots-Tag": "noindex" },
+  });
 }
 
 // ---------------------------------------------------------------------------
