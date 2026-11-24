@@ -91,12 +91,14 @@ export async function verifyPassword(pw: string, stored: string): Promise<Verify
     // 1. Check legacy format: <saltHex32>:<hashHex64>
     if (stored.includes(":") && !stored.includes("$")) {
       const parts = stored.split(":");
-      if (parts.length === 2 && parts[0].length === 32 && parts[1].length === 64) {
-        const salt = hexToBytes(parts[0]);
+      const p0 = parts[0];
+      const p1 = parts[1];
+      if (parts.length === 2 && p0 && p1 && p0.length === 32 && p1.length === 64) {
+        const salt = hexToBytes(p0);
         if (!salt) return { ok: false, needsUpgrade: false };
 
         const computed = await derivePbkdf2Hex(pw, salt, LEGACY_ITERATIONS);
-        const matches = constantTimeEqual(computed, parts[1]);
+        const matches = constantTimeEqual(computed, p1);
         return {
           ok: matches,
           needsUpgrade: matches, // Always needs upgrade from legacy
@@ -107,13 +109,16 @@ export async function verifyPassword(pw: string, stored: string): Promise<Verify
 
     // 2. Check standard format: pbkdf2$sha256$<iters>$<saltHex>$<hashHex>
     const match = stored.match(/^pbkdf2\$sha256\$(\d+)\$([0-9a-fA-F]{32})\$([0-9a-fA-F]{64})$/);
-    if (!match) {
+    const m1 = match?.[1];
+    const m2 = match?.[2];
+    const m3 = match?.[3];
+    if (!m1 || !m2 || !m3) {
       return { ok: false, needsUpgrade: false };
     }
 
-    const iters = parseInt(match[1], 10);
-    const saltHex = match[2];
-    const expectedHashHex = match[3];
+    const iters = parseInt(m1, 10);
+    const saltHex = m2;
+    const expectedHashHex = m3;
 
     if (iters <= 0) return { ok: false, needsUpgrade: false };
     const salt = hexToBytes(saltHex);

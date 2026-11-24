@@ -42,7 +42,7 @@ export function getClientIp(req: Request): string | null {
   }
 
   // 2. Fallback to x-forwarded-for ONLY in non-production environments
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env["NODE_ENV"] !== "production") {
     const xff = headers.get("x-forwarded-for");
     if (xff) {
       const firstIp = xff.split(",")[0]?.trim();
@@ -60,9 +60,9 @@ export function getClientIp(req: Request): string | null {
  * Raw IPs are never stored in the database.
  */
 export function hashIp(ip: string): string {
-  const salt = process.env.IP_HASH_SALT;
+  const salt = process.env["IP_HASH_SALT"];
   if (!salt) {
-    if (process.env.NODE_ENV === "production") {
+    if (process.env["NODE_ENV"] === "production") {
       throw new Error("Missing required IP_HASH_SALT environment variable");
     }
     return createHash("sha256")
@@ -78,10 +78,11 @@ export function hashIp(ip: string): string {
  * Derives a 32-byte session signing key using HKDF-SHA256.
  */
 function getSessionKey(): Buffer {
-  if (process.env.REPORTING_SESSION_SECRET) {
-    return Buffer.from(process.env.REPORTING_SESSION_SECRET, "utf-8");
+  const sessionSecret = process.env["REPORTING_SESSION_SECRET"];
+  if (sessionSecret) {
+    return Buffer.from(sessionSecret, "utf-8");
   }
-  const salt = process.env.IP_HASH_SALT || DEV_FALLBACK_SALT;
+  const salt = process.env["IP_HASH_SALT"] || DEV_FALLBACK_SALT;
   return Buffer.from(hkdfSync("sha256", salt, Buffer.alloc(0), HKDF_INFO, 32));
 }
 

@@ -87,7 +87,7 @@ describe("reserved slugs: validateSlugFormat & isReservedSlug", () => {
     for (const file of publicFiles) {
       if (file.startsWith("_")) continue;
       const baseName = file.split(".")[0];
-      if (baseName.length >= 3) {
+      if (baseName && baseName.length >= 3) {
         expect(
           isReservedSlug(baseName),
           `Public asset basename "${baseName}" should be reserved`,

@@ -13,7 +13,7 @@ describe("ip.server: client IP and reporting session", () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
-    process.env.IP_HASH_SALT = "test_ip_hash_salt_32_characters_long_min";
+    process.env["IP_HASH_SALT"] = "test_ip_hash_salt_32_characters_long_min";
   });
 
   afterEach(() => {
@@ -29,7 +29,7 @@ describe("ip.server: client IP and reporting session", () => {
     });
 
     it("falls back to x-forwarded-for in development/test", () => {
-      process.env.NODE_ENV = "development";
+      process.env["NODE_ENV"] = "development";
       const req = new Request("https://example.com", {
         headers: { "x-forwarded-for": "198.51.100.22, 10.0.0.1" },
       });
@@ -37,7 +37,7 @@ describe("ip.server: client IP and reporting session", () => {
     });
 
     it("strictly ignores x-forwarded-for in production", () => {
-      process.env.NODE_ENV = "production";
+      process.env["NODE_ENV"] = "production";
       const req = new Request("https://example.com", {
         headers: { "x-forwarded-for": "198.51.100.22" },
       });
@@ -62,8 +62,8 @@ describe("ip.server: client IP and reporting session", () => {
     });
 
     it("throws clear configuration error in production if IP_HASH_SALT is missing", () => {
-      process.env.NODE_ENV = "production";
-      delete process.env.IP_HASH_SALT;
+      process.env["NODE_ENV"] = "production";
+      delete process.env["IP_HASH_SALT"];
       expect(() => hashIp("203.0.113.1")).toThrow("Missing required IP_HASH_SALT");
     });
   });
@@ -78,7 +78,7 @@ describe("ip.server: client IP and reporting session", () => {
       expect(setCookie).toContain("SameSite=Lax");
       expect(setCookie).toContain("Max-Age=7200");
 
-      const cookieVal = setCookie.split(";")[0];
+      const cookieVal = setCookie.split(";")[0] ?? "";
       const verified = verifyReportingCookie(cookieVal);
       expect(verified).not.toBeNull();
       expect(verified?.sessionId).toBe(sessionId);
@@ -86,10 +86,11 @@ describe("ip.server: client IP and reporting session", () => {
 
     it("rejects tampered signature", () => {
       const { setCookie } = issueReportingCookie();
-      const cookieVal = setCookie.split(";")[0];
+      const cookieVal = setCookie.split(";")[0] ?? "";
       const parts = cookieVal.split(".");
+      const p2 = parts[2] ?? "";
       // Tamper last hex character
-      const tamperedHex = parts[2].slice(0, -1) + (parts[2].endsWith("0") ? "1" : "0");
+      const tamperedHex = p2.slice(0, -1) + (p2.endsWith("0") ? "1" : "0");
       const tamperedCookie = `${parts[0]}.${parts[1]}.${tamperedHex}`;
 
       expect(verifyReportingCookie(tamperedCookie)).toBeNull();
@@ -97,7 +98,7 @@ describe("ip.server: client IP and reporting session", () => {
 
     it("rejects expired cookie", () => {
       const { setCookie } = issueReportingCookie();
-      const cookieVal = setCookie.split(";")[0];
+      const cookieVal = setCookie.split(";")[0] ?? "";
 
       // Fast-forward time past 2 hours
       const now = Date.now();
@@ -129,7 +130,7 @@ describe("ip.server: client IP and reporting session", () => {
 
     it("returns session identity when trusted IP is absent but cookie is valid", () => {
       const { sessionId, setCookie } = issueReportingCookie();
-      const cookieHeader = setCookie.split(";")[0];
+      const cookieHeader = setCookie.split(";")[0] ?? "";
 
       const req = new Request("https://example.com", {
         headers: { cookie: cookieHeader },

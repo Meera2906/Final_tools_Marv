@@ -32,9 +32,12 @@ export function generateSlug(length = 7, rng?: (n: number) => Uint8Array): strin
     const bytes = getBytes(Math.max(needed, 16));
     for (let i = 0; i < bytes.length; i++) {
       const b = bytes[i];
-      if (b < REJECTION_LIMIT) {
-        chars.push(BASE62_CHARSET[b % CHARSET_LENGTH]);
-        if (chars.length === length) break;
+      if (b !== undefined && b < REJECTION_LIMIT) {
+        const char = BASE62_CHARSET[b % CHARSET_LENGTH];
+        if (char !== undefined) {
+          chars.push(char);
+          if (chars.length === length) break;
+        }
       }
     }
   }

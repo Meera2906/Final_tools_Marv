@@ -21,7 +21,7 @@ describe("slug: generateSlug and generateUniqueSlug", () => {
     const mockRng = (n: number) => {
       const arr = new Uint8Array(n);
       for (let i = 0; i < n; i++) {
-        arr[i] = sequence[idx++ % sequence.length];
+        arr[i] = sequence[idx++ % sequence.length] ?? 0;
       }
       return arr;
     };
