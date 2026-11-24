@@ -1,0 +1,895 @@
+openapi: 3.1.0
+
+info:
+  title: Marvedge Link Shortener API
+  version: "0.2.0"
+  description: |
+    API specification for the Marvedge Tools link shortener service (T-00033).
+
+    ## Two Architectural Surfaces
+
+    ### 1. HTTP Surfaces
+    - **Redirect Route (`/go/{code}`):**
+      - `GET /go/{code}`: Public redirect resolution. Clean active links receive an immediate server HTTP 302 redirect.
+        Password-protected and `pending_review` links return HTTP 200 HTML prompts. Automatically issues
+        an HMAC-SHA256 signed reporting session cookie (`_mrv_rep_sess`) if client IP is untrusted.
+      - `POST /go/{code}`: Server-side form action handler for password unlocks and interstitial continuations.
+        Validates credentials/status on the server, awaits `register_click()`, and emits a **native server-side HTTP 302 redirect**
+        with security headers. Zero client-side JavaScript navigation (`window.location.replace`) is used.
+    - **Dedicated Admin API (`/api/admin/links/*`):** Machine-to-machine server HTTP endpoints for operations,
+      CLI tools, and moderation scripts. Protected strictly by `x-admin-api-key` verified in constant time.
+      **Decoupled from CSRF:** Because these are dedicated server HTTP routes rather than client server functions,
+      they are not subject to TanStack Start's client CSRF middleware (`x-tanstack-csrf-token` is not required).
+      The `ADMIN_API_KEY` is strictly server-to-server and is never exposed to browser bundles.
+
+    ### 2. Client Server Function RPC Surface (TanStack Start `createServerFn`)
+    Link creation, creator management, and abuse reporting are implemented as TanStack Start server functions
+    invoked by browser components.
+    - All client server functions are POST RPCs protected by global CSRF middleware (`x-tanstack-csrf-token`).
+    - **Creator Token Cryptography:** Generated as 32 CSPRNG bytes delivered as base64url. The client UI
+      stores the token in `localStorage`. The database stores `hex(SHA-256(rawBytes))`. When authenticated,
+      the incoming base64url token is decoded into raw bytes before hashing.
+    - **Client IP & Signed Session Policy:** Netlify edge header `x-nf-client-connection-ip` takes precedence.
+      When missing/untrusted, an HMAC-SHA256 signed reporting session cookie (`_mrv_rep_sess`) with 128-bit entropy
+      and purpose-derived key ($K_{\text{sess}}$) is required.
+      Unverified reports are assigned deterministic session hashes, capped at 2/hour, and strictly excluded
+      from auto-escalation thresholds.
+
+  contact:
+    name: Marvedge Engineering
+  license:
+    name: Private
+
+servers:
+  - url: https://marvedge.com
+    description: Production origin (provisional default; configurable via PUBLIC_SITE_URL)
+  - url: http://localhost:3000
+    description: Local development environment
+
+tags:
+  - name: redirect
+    description: Public HTTP 302 redirect & server form action endpoints
+  - name: links
+    description: Public link creation and creator-token management RPCs (CSRF protected)
+  - name: reports
+    description: Public abuse reporting RPCs (CSRF protected)
+  - name: admin
+    description: Dedicated server-to-server admin moderation HTTP routes (requires ADMIN_API_KEY, no CSRF)
+
+paths:
+
+  # ═══════════════════════════════════════════════════════════
+  # 1. PUBLIC HTTP REDIRECT & FORM ACTION SURFACE
+  # ═══════════════════════════════════════════════════════════
+
+  /go/{code}:
+    get:
+      tags: [redirect]
+      operationId: resolveRedirect
+      summary: Resolve and redirect a short link
+      description: |
+        Resolves short slug and determines routing behavior based on link lifecycle state:
+
+        | Link Status / Condition | HTTP Status | Response |
+        |-------------------------|-------------|----------|
+        | `active`, unexpired, unprotected | 302 | Immediate server redirect (`Location: {url}`) |
+        | `active`, unexpired, password set | 200 | Password unlock HTML form (no destination URL disclosed) |
+        | `pending_review` (unprotected) | 200 | Interstitial warning notice HTML with option to proceed |
+        | `pending_review` + password | 200 | Password unlock HTML form with review warning badge (no URL disclosed) |
+        | `expired` (`expires_at < now()`) | 410 | "Link expired" notice HTML |
+        | `disabled` (by creator) | 410 | "Link disabled" notice HTML |
+        | `blocked` (by admin) | 410 | "Link removed" policy notice HTML |
+        | Target domain in blocklist | 410 | "Link removed" blocklist notice HTML |
+        | Code not found | 404 | 404 Not Found notice HTML |
+        | Rate limit exceeded | 429 | Rate limit notice HTML with `Retry-After` header |
+
+        **Reliable Click Tracking:** Click increments (`register_click`) are explicitly awaited in the database
+        before issuing the 302 redirect, guaranteeing durability in serverless runtimes.
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: Short code slug (3–40 characters matching `^[A-Za-z0-9_-]{3,40}$`).
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{3,40}$'
+            minLength: 3
+            maxLength: 40
+          example: summer-sale
+      responses:
+        "302":
+          description: Successful server-side redirect to destination URL.
+          headers:
+            Location:
+              required: true
+              description: Validated destination URL.
+              schema:
+                type: string
+                format: uri
+            Cache-Control:
+              description: Prevents intermediary caching so status changes and takedowns apply immediately.
+              schema:
+                type: string
+                enum: ["no-store"]
+            Referrer-Policy:
+              description: Protects user privacy and prevents token/path leakage to destination.
+              schema:
+                type: string
+                enum: ["no-referrer"]
+            X-Robots-Tag:
+              description: Prevents search engines from indexing redirect routes.
+              schema:
+                type: string
+                enum: ["noindex"]
+        "200":
+          description: HTML page (password unlock prompt or pending review interstitial).
+          content:
+            text/html:
+              schema:
+                type: string
+        "404":
+          description: Short link not found.
+          content:
+            text/html:
+              schema:
+                type: string
+        "410":
+          description: Link has expired, been disabled by its creator, or been blocked by moderation.
+          content:
+            text/html:
+              schema:
+                type: string
+        "429":
+          description: Rate limit exceeded for this client IP hash.
+          headers:
+            Retry-After:
+              required: true
+              description: Cooldown period in seconds.
+              schema:
+                type: integer
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      tags: [redirect]
+      operationId: submitRedirectAction
+      summary: Server-side form action for password unlock or interstitial continuation
+      description: |
+        Processes server-side form submissions from password unlock forms and interstitial continue buttons.
+        - **Password Unlock:** Verifies password using constant-time comparison. If correct, awaits `register_click()`
+          and emits a native server-side HTTP 302 redirect. If password is wrong, re-renders the form with HTTP 200 and error.
+        - **Interstitial Continuation:** Re-validates link status, awaits `register_click()`, and emits a native server-side HTTP 302 redirect.
+        - **Zero Client Navigation:** Eliminates any reliance on browser-side `window.location.replace`.
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  enum: [unlock, continue]
+                  description: Action being performed.
+                password:
+                  type: string
+                  description: Password provided if action is 'unlock'.
+              required: [action]
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  enum: [unlock, continue]
+                password:
+                  type: string
+              required: [action]
+      responses:
+        "302":
+          description: Direct server HTTP 302 redirect to target destination after successful validation and click registration.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                format: uri
+            Cache-Control:
+              schema:
+                type: string
+                enum: ["no-store"]
+            Referrer-Policy:
+              schema:
+                type: string
+                enum: ["no-referrer"]
+            X-Robots-Tag:
+              schema:
+                type: string
+                enum: ["noindex"]
+        "200":
+          description: Validation failed (e.g. incorrect password); re-renders HTML form with error notice.
+          content:
+            text/html:
+              schema:
+                type: string
+        "410":
+          description: Link expired or disabled.
+          content:
+            text/html:
+              schema:
+                type: string
+        "429":
+          description: Password attempt rate limit exceeded.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+
+  # ═══════════════════════════════════════════════════════════
+  # 2. CLIENT SERVER FUNCTION RPCs (CSRF PROTECTED)
+  # ═══════════════════════════════════════════════════════════
+
+  /_sfn/createShortLink:
+    post:
+      tags: [links]
+      operationId: createShortLink
+      summary: Create a short link
+      description: |
+        Creates a new short link and returns a high-entropy creator token.
+
+        - **Creator Token:** Generated via 32 bytes CSPRNG. Delivered as base64url **only once** in this response.
+          The client UI persists it in local storage. The database stores `hex(SHA-256(rawBytes))`.
+          There is no recovery mechanism if the token is lost.
+        - **Destination Safety Validation:** Validates URL length (<= 2048), scheme (`http`/`https` only),
+          rejects embedded credentials, private/loopback/link-local IPv4 & IPv6 ranges, octal/hex IP encodings,
+          cloud metadata endpoints (`169.254.169.254`), and self-origin loop redirects.
+        - **Shortener Chaining:** Allowed by default; optionally rejectable via `BLOCK_SHORTENER_CHAINS=true`.
+        - **Rate Limits:** Fixed-window limits of 5 requests/minute burst and 10 requests/hour per client IP hash.
+      x-tanstack-server-fn: true
+      x-csrf-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateShortLinkInput"
+      responses:
+        "200":
+          description: Creation result with status discriminant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateShortLinkResult"
+
+  /_sfn/resolveShortLink:
+    post:
+      tags: [links]
+      operationId: resolveShortLink
+      summary: Resolve short link target and status
+      description: |
+        Called server-side by the route loader and client-side by the password unlock form.
+        Re-evaluates blocklist membership and dynamically checks expiration.
+        On successful password entry against a legacy format, re-hashes the password to PBKDF2 with SHA-256.
+        When a link is both password-protected and flagged for review, the password prompt status is returned
+        without disclosing the destination URL until authenticated.
+      x-tanstack-server-fn: true
+      x-csrf-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveShortLinkInput"
+      responses:
+        "200":
+          description: Link resolution state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolveShortLinkResult"
+
+  /_sfn/getLinkInfo:
+    post:
+      tags: [links]
+      operationId: getLinkInfo
+      summary: Retrieve link metrics (requires creator token)
+      description: |
+        Provides click analytics and configuration details to the verified creator.
+        Decodes incoming base64url token into raw 32 bytes and authenticates via constant-time SHA-256 comparison.
+      x-tanstack-server-fn: true
+      x-csrf-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatorTokenInput"
+      responses:
+        "200":
+          description: Link metadata or unauthorized error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LinkInfoResult"
+
+  /_sfn/updateLink:
+    post:
+      tags: [links]
+      operationId: updateLink
+      summary: Update link properties (requires creator token)
+      description: |
+        Allows creators to update expiry dates, clear/update passwords, or toggle `status`
+        between `'active'` and `'disabled'`.
+        Creators cannot set statuses to `'blocked'` or `'pending_review'`.
+      x-tanstack-server-fn: true
+      x-csrf-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLinkInput"
+      responses:
+        "200":
+          description: Operation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkOrError"
+
+  /_sfn/disableLink:
+    post:
+      tags: [links]
+      operationId: disableLink
+      summary: Disable a short link (requires creator token)
+      description: Convenience wrapper over `updateLink({ status: "disabled" })`.
+      x-tanstack-server-fn: true
+      x-csrf-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatorTokenInput"
+      responses:
+        "200":
+          description: Operation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkOrError"
+
+  /_sfn/reportLink:
+    post:
+      tags: [reports]
+      operationId: reportLink
+      summary: Submit abuse report for a link
+      description: |
+        Public abuse reporting endpoint.
+        - Deduplication: Deduplicated per link and verified reporter hash via database unique constraint.
+        - Escalation Policy: Handled atomically via `submit_link_report()` holding an exclusive row lock on `short_links`.
+          Accumulating >= 3 distinct verified open (`status = 'open'`) reports transitions link status to `pending_review`.
+          Dismissed reports and unverified fallback reports are strictly excluded from auto-escalation.
+        - Unverified Client Guard: If client IP cannot be verified, an HMAC-SHA256 signed reporting session cookie
+          (`_mrv_rep_sess`, 128 bits entropy, 2-hour lifetime) is required; submissions lacking a valid signed cookie
+          are rejected with `unverified_client`.
+        - Rate Limit: Fixed-window limit of 5 reports per hour per client IP hash (or 2/hour per unverified session).
+      x-tanstack-server-fn: true
+      x-csrf-required: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportLinkInput"
+      responses:
+        "200":
+          description: Report acceptance status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportLinkResult"
+
+  # ═══════════════════════════════════════════════════════════
+  # 3. DEDICATED SERVER HTTP ROUTES FOR ADMIN (NO CSRF)
+  # ═══════════════════════════════════════════════════════════
+
+  /api/admin/links/reports:
+    get:
+      tags: [admin]
+      operationId: adminListReports
+      summary: List abuse reports (server-to-server admin only)
+      description: |
+        Retrieves paginated abuse reports. Dedicated server HTTP endpoint gated by `x-admin-api-key`
+        header verified in constant time. Not subject to TanStack CSRF middleware.
+        `ADMIN_API_KEY` is server-side only and never exposed to client code.
+      security:
+        - adminApiKey: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [open, reviewed, actioned, dismissed]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Paginated report list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListReportsResult"
+        "401":
+          description: Unauthorized (missing or invalid x-admin-api-key).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnauthorizedError"
+
+    patch:
+      tags: [admin]
+      operationId: adminUpdateReportStatus
+      summary: Update report moderation status (server-to-server admin only)
+      description: |
+        Updates the review state of an individual abuse report (`reviewed`, `actioned`, or `dismissed`).
+        Gated by `x-admin-api-key` header verified in constant time. Not subject to CSRF middleware.
+      security:
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateReportStatusInput"
+      responses:
+        "200":
+          description: Update result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkOrError"
+        "401":
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnauthorizedError"
+
+  /api/admin/links/status:
+    post:
+      tags: [admin]
+      operationId: adminSetLinkStatus
+      summary: Moderation status override (server-to-server admin only)
+      description: |
+        Allows administrators to change link status to `'active'`, `'disabled'`, `'blocked'`, or `'pending_review'`.
+        When setting status to `'active'`, executes `admin_restore_link()` transactionally holding a row lock on
+        `short_links` to restore the link and transition open reports to `'reviewed'` in a single atomic transaction.
+        Optionally adds the target domain to `blocked_domains` if `addDomain: true` and `status: "blocked"`.
+        Gated by `x-admin-api-key` header verified in constant time. Not subject to CSRF middleware.
+      security:
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetLinkStatusInput"
+      responses:
+        "200":
+          description: Update result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkOrError"
+        "401":
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnauthorizedError"
+
+  /api/admin/links/blocked-domains:
+    post:
+      tags: [admin]
+      operationId: adminAddBlockedDomain
+      summary: Add domain to blocklist (server-to-server admin only)
+      description: |
+        Inserts a domain into `blocked_domains`. Applies suffix matching application-side
+        so blocking `evil.com` blocks all subdomains (`sub.evil.com`).
+        Gated by `x-admin-api-key` header verified in constant time. Not subject to CSRF middleware.
+      security:
+        - adminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddBlockedDomainInput"
+      responses:
+        "200":
+          description: Operation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkOrError"
+        "401":
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnauthorizedError"
+
+# ═══════════════════════════════════════════════════════════
+# COMPONENTS & SCHEMAS
+# ═══════════════════════════════════════════════════════════
+
+components:
+
+  schemas:
+
+    CreateShortLinkInput:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: Destination target URL. Subject to destination safety validation.
+          example: "https://example.com/long-page-path"
+        code:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{3,40}$'
+          minLength: 3
+          maxLength: 40
+          description: Optional custom slug. Checked against reserved system and tool slugs.
+          example: "summer-sale"
+        password:
+          type: string
+          minLength: 4
+          maxLength: 100
+          description: Optional password protection. Hashed with versioned PBKDF2 (SHA-256).
+        expiresAt:
+          type: string
+          format: date-time
+          description: Optional ISO 8601 expiration timestamp. Must be in the future.
+
+    CreateShortLinkResult:
+      oneOf:
+        - type: object
+          required: [ok, code, creatorToken]
+          properties:
+            ok:
+              type: boolean
+              enum: [true]
+            code:
+              type: string
+            creatorToken:
+              type: string
+              description: One-time 32-byte CSPRNG token (base64url). Save immediately; unrecoverable if lost.
+        - type: object
+          required: [ok, error]
+          properties:
+            ok:
+              type: boolean
+              enum: [false]
+            error:
+              type: string
+              enum:
+                - taken
+                - reserved
+                - invalid_url
+                - blocked_domain
+                - rate_limited
+                - server_error
+            retryAfter:
+              type: integer
+              description: Seconds to wait if rate limited.
+
+    ResolveShortLinkInput:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          maxLength: 40
+        password:
+          type: string
+          maxLength: 100
+
+    ResolveShortLinkResult:
+      oneOf:
+        - type: object
+          required: [status, url]
+          properties:
+            status:
+              type: string
+              enum: [ok]
+            url:
+              type: string
+              format: uri
+        - type: object
+          required: [status, url]
+          description: Link flagged for review; interstitial warning shown with continue option.
+          properties:
+            status:
+              type: string
+              enum: [pending_review]
+            url:
+              type: string
+              format: uri
+        - type: object
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum:
+                - password
+                - password_pending_review  # Password required and link is flagged; no URL disclosed until unlocked
+                - expired
+                - missing
+                - wrong
+                - disabled
+                - blocked
+        - type: object
+          required: [status, retryAfter]
+          properties:
+            status:
+              type: string
+              enum: [rate_limited]
+            retryAfter:
+              type: integer
+
+    CreatorTokenInput:
+      type: object
+      required: [code, creatorToken]
+      properties:
+        code:
+          type: string
+          maxLength: 40
+        creatorToken:
+          type: string
+          description: Base64url encoded 32-byte CSPRNG creator token.
+
+    LinkInfoResult:
+      oneOf:
+        - type: object
+          required: [ok, code, url, status, clicks, createdAt]
+          properties:
+            ok:
+              type: boolean
+              enum: [true]
+            code:
+              type: string
+            url:
+              type: string
+              format: uri
+            status:
+              type: string
+              enum: [active, disabled, blocked, pending_review]
+            clicks:
+              type: integer
+              minimum: 0
+            createdAt:
+              type: string
+              format: date-time
+            expiresAt:
+              type: ["string", "null"]
+              format: date-time
+            lastClickedAt:
+              type: ["string", "null"]
+              format: date-time
+        - type: object
+          required: [ok, error]
+          properties:
+            ok:
+              type: boolean
+              enum: [false]
+            error:
+              type: string
+              enum: [not_found, unauthorized, rate_limited]
+
+    UpdateLinkInput:
+      type: object
+      required: [code, creatorToken]
+      properties:
+        code:
+          type: string
+          maxLength: 40
+        creatorToken:
+          type: string
+        expiresAt:
+          type: ["string", "null"]
+          format: date-time
+          description: Pass null to clear expiration.
+        status:
+          type: string
+          enum: [active, disabled]
+          description: Creators can toggle active or disabled only.
+        password:
+          type: ["string", "null"]
+          minLength: 4
+          maxLength: 100
+          description: Pass null to remove password protection.
+
+    OkOrError:
+      oneOf:
+        - type: object
+          required: [ok]
+          properties:
+            ok:
+              type: boolean
+              enum: [true]
+        - type: object
+          required: [ok, error]
+          properties:
+            ok:
+              type: boolean
+              enum: [false]
+            error:
+              type: string
+              enum: [not_found, unauthorized, rate_limited, server_error]
+
+    UnauthorizedError:
+      type: object
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          enum: [false]
+        error:
+          type: string
+          enum: [unauthorized]
+
+    ReportLinkInput:
+      type: object
+      required: [code, reason]
+      properties:
+        code:
+          type: string
+          maxLength: 40
+        reason:
+          type: string
+          enum: [phishing, malware, spam, illegal, other]
+        details:
+          type: string
+          maxLength: 1000
+
+    ReportLinkResult:
+      oneOf:
+        - type: object
+          required: [ok]
+          properties:
+            ok:
+              type: boolean
+              enum: [true]
+            alreadyReported:
+              type: boolean
+        - type: object
+          required: [ok, error]
+          properties:
+            ok:
+              type: boolean
+              enum: [false]
+            error:
+              type: string
+              enum: [not_found, rate_limited, unverified_client]
+
+    ListReportsResult:
+      oneOf:
+        - type: object
+          required: [ok, reports, total]
+          properties:
+            ok:
+              type: boolean
+              enum: [true]
+            reports:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReportRecord"
+            total:
+              type: integer
+        - type: object
+          required: [ok, error]
+          properties:
+            ok:
+              type: boolean
+              enum: [false]
+            error:
+              type: string
+              enum: [unauthorized]
+
+    UpdateReportStatusInput:
+      type: object
+      required: [reportId, status]
+      properties:
+        reportId:
+          type: string
+          format: uuid
+          description: Unique identifier of the abuse report.
+        status:
+          type: string
+          enum: [reviewed, actioned, dismissed]
+          description: Updated moderation status of the report.
+
+    ReportRecord:
+      type: object
+      required: [id, code, reason, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        reason:
+          type: string
+          enum: [phishing, malware, spam, illegal, other]
+        details:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [open, reviewed, actioned, dismissed]
+        createdAt:
+          type: string
+          format: date-time
+
+    SetLinkStatusInput:
+      type: object
+      required: [code, status]
+      properties:
+        code:
+          type: string
+          maxLength: 40
+        status:
+          type: string
+          enum: [active, disabled, blocked, pending_review]
+        addDomain:
+          type: boolean
+          default: false
+          description: If true and status is blocked, adds target domain to blocked_domains.
+
+    AddBlockedDomainInput:
+      type: object
+      required: [domain]
+      properties:
+        domain:
+          type: string
+          description: Domain to block (suffix matching applied).
+          example: "evil.com"
+        source:
+          type: string
+          default: "manual"
+
+  securitySchemes:
+    adminApiKey:
+      type: apiKey
+      in: header
+      name: x-admin-api-key
+      description: |
+        Server-to-server admin secret. Verified using constant-time comparison against ADMIN_API_KEY.
+        Never exposed in browser code or client-side bundles. No CSRF token required.
+    csrfToken:
+      type: apiKey
+      in: header
+      name: x-tanstack-csrf-token
+      description: Global TanStack Start CSRF token attached by client middleware for browser RPCs.
