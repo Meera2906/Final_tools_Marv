@@ -799,7 +799,7 @@ src/
 | Password brute-forcing                     | Rate limit: 5 attempts per 15 min per IP/code                                     | `src/test/links-service.test.ts`    |
 | Report flooding from single source         | Deduplication via `(code, reporter_hash)` unique constraint                       | `src/test/links-service.test.ts`    |
 | Disruption via false report brigades       | Only open, verified reports count toward escalation; unverified IPs excluded      | `src/test/links-service.test.ts`    |
-| Unauthorized admin modification            | Constant-time `ADMIN_API_KEY` verification on dedicated server HTTP routes        | `src/test/links-service.test.ts`    |
+| Unauthorized admin modification            | Constant-time `ADMIN_API_KEY` verification on dedicated server HTTP routes        | `src/test/links-admin.test.ts`      |
 | Creator token interception                 | Raw token never in build bundles; raw bytes decoded & SHA-256 hash stored         | `src/test/links-token.test.ts`      |
 | Moderation race condition                  | `admin_restore_link` and `submit_link_report` serialize on `short_links` row lock | `src/test/links-service.test.ts`    |
 
@@ -963,8 +963,57 @@ Adopt **Option A (`pg_cron`)** as the primary database-native approach. For depl
 
 ---
 
-## 19. Remaining Unresolved Questions for Team Confirmation
+## 20. Remaining Unresolved Questions for Team Confirmation
 
 1. **Production Origin Verification:** Is `https://marvedge.com` the confirmed production URL, or is there an alternative short domain used in live environments?
 2. **Maintenance Scheduling Infrastructure:** Is Supabase `pg_cron` accessible on the project tier for invoking `cleanup_rate_limits()`, or should a Netlify Scheduled Function be committed?
 3. **Loss of Creator Token Policy:** Confirm that in v1, lost creator tokens cannot be recovered by the user and require manual administrative intervention.
+
+---
+
+## 21. Applied Amendments & Verified Implementation Decisions (A1–A6)
+
+During implementation of Stages 1 through 6, the following architectural decisions and amendments were formalized and verified across migrations, server code, and test suites:
+
+### A1. Supabase Privilege Hardening (§6.2 & §6.3)
+Supabase automatically grants new `public` routines to `anon` and `authenticated` roles. To prevent unauthorized PostgREST execution with the client publishable key:
+- Every new function executes:
+  ```sql
+  REVOKE ALL ON FUNCTION public.<fn_name> FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.<fn_name> TO service_role;
+  ```
+- Every new table (`rate_limits`, `link_reports`, `blocked_domains`) executes:
+  ```sql
+  REVOKE ALL ON TABLE public.<table_name> FROM anon, authenticated;
+  ALTER TABLE public.<table_name> ENABLE ROW LEVEL SECURITY;
+  -- Zero policies created; direct PostgREST access yields empty/rejected results
+  GRANT ALL ON TABLE public.<table_name> TO service_role;
+  ```
+
+### A2. Constraint Safety & Idempotent Migrations (§6.1)
+To ensure migrations are safely re-runnable and do not crash on legacy rows:
+- Table constraints `short_links_expiry_order` and `short_links_url_length` are wrapped in `DO $$ ... IF NOT EXISTS (SELECT 1 FROM pg_constraint ...)` blocks and declared `NOT VALID` where historical data could fail strict validation.
+
+### A3. Slug Reservation Architecture (§9.1)
+- `src/lib/links/reserved.ts` maintains a pure static set combined dynamically with `tools.map(t => t.slug)`.
+- Filesystem scanning of `src/routes/` and `public/` assets is executed strictly inside regression unit tests (`src/test/links-reserved.test.ts`), completely decoupling runtime performance from filesystem I/O.
+
+### A4. Reporting Session Cookie Specification (§10.2)
+- When client IP cannot be verified via Netlify edge header `x-nf-client-connection-ip`:
+  - **Structure:** `_mrv_rep_sess = ${sessionId}.${expiresAtTimestamp}.${hmacHex}`
+  - **Lifetime:** Fixed 2-hour lifetime (`Max-Age=7200`, `expiresAtTimestamp = Date.now() + 7200000`).
+  - **Key Derivation:** Purpose-derived 32-byte secret $K_{\text{sess}}$ derived via HKDF-SHA256 from `IP_HASH_SALT` with info `"mrv-link-shortener-reporting-session-v1"`.
+  - **Attributes:** `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=7200`.
+  - **Verification:** Constant-time verification using `crypto.timingSafeEqual`.
+  - **Auto-issuance:** Automatically emitted via `Set-Cookie` on `GET /go/:code` when trusted IP is absent.
+  - **Exclusion from Threshold:** Unverified reports (`reporter_hash LIKE 'unverified:%'`) are strictly excluded from the $\ge 3$ distinct report threshold required for automatic escalation to `pending_review`.
+
+### A5. Native POST CSRF Boundary (§8.1 & §8.2)
+- TanStack Start's `createCsrfMiddleware` in `src/start.ts` filters strictly on `ctx.handlerType === "serverFn"`.
+- Native POST actions on `/go/:code` (`unlock` and `continue`) enforce origin validation via `validatePostOrigin`:
+  - Requires request `Origin` or `Referer` host to match the request host header or `PUBLIC_SITE_URL` host.
+  - Allows `Sec-Fetch-Site: same-origin` as a fallback.
+  - Cross-site or mismatched submissions are rejected immediately with HTTP 403 Forbidden.
+
+### A6. Isolated Test Harness
+- Because baseline Vitest configuration experiences runner crashes on JSDOM virtual modules, all link shortener tests run under an isolated configuration (`vitest.links.config.ts`) using the native `node` environment, path alias `@` -> `./src`, and `testTimeout: 20000` to accommodate PBKDF2 cryptography across parallel test threads. All 12 test files and 128 unit tests pass with zero reliance on broken baseline files.

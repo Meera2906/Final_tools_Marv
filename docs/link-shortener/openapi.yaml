@@ -509,6 +509,50 @@ paths:
                 $ref: "#/components/schemas/UnauthorizedError"
 
   /api/admin/links/blocked-domains:
+    get:
+      tags: [admin]
+      operationId: adminListBlockedDomains
+      summary: List all blocked domains (server-to-server admin only)
+      description: |
+        Retrieves all currently active blocked domain records.
+        Gated by `x-admin-api-key` header verified in constant time. Not subject to CSRF middleware.
+      security:
+        - adminApiKey: []
+      responses:
+        "200":
+          description: List of blocked domains.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, domains]
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  domains:
+                    type: array
+                    items:
+                      type: object
+                      required: [domain, created_at]
+                      properties:
+                        domain:
+                          type: string
+                          example: "spam-site.com"
+                        source:
+                          type: string
+                          nullable: true
+                          example: "admin_investigation"
+                        created_at:
+                          type: string
+                          format: date-time
+        "401":
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnauthorizedError"
+
     post:
       tags: [admin]
       operationId: adminAddBlockedDomain
@@ -525,6 +569,47 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/AddBlockedDomainInput"
+      responses:
+        "200":
+          description: Operation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkOrError"
+        "401":
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnauthorizedError"
+
+    delete:
+      tags: [admin]
+      operationId: adminRemoveBlockedDomain
+      summary: Remove domain from blocklist (server-to-server admin only)
+      description: |
+        Removes a domain from `blocked_domains`.
+        Domain can be supplied via query parameter `?domain=example.com` or in the JSON request body.
+        Gated by `x-admin-api-key` header verified in constant time. Not subject to CSRF middleware.
+      security:
+        - adminApiKey: []
+      parameters:
+        - name: domain
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Domain name to remove from blocklist.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                domain:
+                  type: string
+                  example: "spam-site.com"
       responses:
         "200":
           description: Operation result.

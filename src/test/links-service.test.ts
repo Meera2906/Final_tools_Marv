@@ -352,6 +352,45 @@ describe("links.service: core server functions", () => {
       }
     });
 
+    it("backward-compatibility: legacy link (salt:hash, no creator_token_hash) unlocks, counts clicks and upgrades hash", async () => {
+      const saltBytes = crypto.getRandomValues(new Uint8Array(16));
+      const fullHash = await hashPassword("legacy-pass", saltBytes, 100_000);
+      const parts = fullHash.split("$");
+      const legacyHash = `${parts[3]}:${parts[4]}`;
+
+      mockDb._shortLinks.set("legacy-link", {
+        code: "legacy-link",
+        url: "https://example.com/legacy-target",
+        status: "active",
+        password_hash: legacyHash,
+        creator_token_hash: null,
+        clicks: 5,
+      });
+
+      const res = await resolveShortLinkService(
+        { code: "legacy-link", password: "legacy-pass" },
+        { db: mockDb, rateLimitFn: baseRateLimit },
+      );
+      expect(res.status).toBe("ok");
+      if (res.status === "ok") {
+        expect(res.url).toBe("https://example.com/legacy-target");
+      }
+      expect(mockDb.getRegisteredClicks()).toContain("legacy-link");
+      expect(mockDb._shortLinks.get("legacy-link").clicks).toBe(6);
+
+      // Poll briefly for background PBKDF2 upgrade promise to complete
+      let upgraded = false;
+      for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const row = mockDb._shortLinks.get("legacy-link");
+        if (row?.password_hash?.startsWith("pbkdf2$sha256$300000$")) {
+          upgraded = true;
+          break;
+        }
+      }
+      expect(upgraded).toBe(true);
+    });
+
     it("does NOT disclose URL on pending_review password-protected link before unlock", async () => {
       const pwHash = await hashPassword("pass123");
       mockDb._shortLinks.set("flagged-pw", {
