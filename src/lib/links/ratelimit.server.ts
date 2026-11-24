@@ -30,6 +30,7 @@ export const LIMITS = {
   report: { windowSeconds: 3600, limit: 5 }, // 5 reports per hour per verified IP
   reportSession: { windowSeconds: 3600, limit: 2 }, // 2 reports per hour per session
   creatorManage: { windowSeconds: 60, limit: 60 }, // 60 requests per minute per IP
+  adminFailed: { windowSeconds: 900, limit: 10 }, // 10 failed auth attempts per 15 min per IP
 } as const;
 
 /**
