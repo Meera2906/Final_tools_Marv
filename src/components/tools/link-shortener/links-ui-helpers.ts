@@ -133,7 +133,19 @@ export interface StatusBadgeInfo {
 /**
  * Returns UI badge metadata and permissions for link status.
  */
-export function getStatusBadge(status: string): StatusBadgeInfo {
+export function getStatusBadge(status: string, expiresAt?: string | null): StatusBadgeInfo {
+  if (status === "active" && expiresAt) {
+    const exp = new Date(expiresAt);
+    if (!Number.isNaN(exp.getTime()) && exp.getTime() <= Date.now()) {
+      return {
+        label: "Expired",
+        badgeCls: "bg-amber-500/15 text-amber-800 border-amber-500/30",
+        description: "Expiration time has passed. Visitors receive a 410 Gone page.",
+        canReenable: false,
+        canDisable: false,
+      };
+    }
+  }
   switch (status) {
     case "active":
       return {

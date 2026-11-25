@@ -43,7 +43,7 @@ info:
 servers:
   - url: https://marvedge.com
     description: Production origin (provisional default; configurable via PUBLIC_SITE_URL)
-  - url: http://localhost:3000
+  - url: http://localhost:8080
     description: Local development environment
 
 tags:

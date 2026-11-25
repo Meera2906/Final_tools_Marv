@@ -114,13 +114,13 @@ All admin requests require the `x-admin-api-key` header.
 
 #### 1. List Abuse Reports
 ```bash
-curl -i http://localhost:3000/api/admin/links/reports?status=open&limit=20 \
+curl -i http://localhost:8080/api/admin/links/reports?status=open&limit=20 \
   -H "x-admin-api-key: $ADMIN_API_KEY"
 ```
 
 #### 2. Update Report Status
 ```bash
-curl -i -X PATCH http://localhost:3000/api/admin/links/reports \
+curl -i -X PATCH http://localhost:8080/api/admin/links/reports \
   -H "x-admin-api-key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -131,7 +131,7 @@ curl -i -X PATCH http://localhost:3000/api/admin/links/reports \
 
 #### 3. Moderate Link Status (Block Link & Domain)
 ```bash
-curl -i -X POST http://localhost:3000/api/admin/links/status \
+curl -i -X POST http://localhost:8080/api/admin/links/status \
   -H "x-admin-api-key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -144,7 +144,7 @@ curl -i -X POST http://localhost:3000/api/admin/links/status \
 #### 4. Restore Flagged Link to Active
 Restores link status and marks all open reports for that code as `reviewed` in an atomic transaction:
 ```bash
-curl -i -X POST http://localhost:3000/api/admin/links/status \
+curl -i -X POST http://localhost:8080/api/admin/links/status \
   -H "x-admin-api-key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -156,17 +156,17 @@ curl -i -X POST http://localhost:3000/api/admin/links/status \
 #### 5. Manage Blocked Domains
 ```bash
 # Add domain to blocklist
-curl -i -X POST http://localhost:3000/api/admin/links/blocked-domains \
+curl -i -X POST http://localhost:8080/api/admin/links/blocked-domains \
   -H "x-admin-api-key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"domain": "phishing-gang.net", "source": "admin_investigation"}'
 
 # List all blocked domains
-curl -i http://localhost:3000/api/admin/links/blocked-domains \
+curl -i http://localhost:8080/api/admin/links/blocked-domains \
   -H "x-admin-api-key: $ADMIN_API_KEY"
 
 # Remove domain from blocklist
-curl -i -X DELETE "http://localhost:3000/api/admin/links/blocked-domains?domain=phishing-gang.net" \
+curl -i -X DELETE "http://localhost:8080/api/admin/links/blocked-domains?domain=phishing-gang.net" \
   -H "x-admin-api-key: $ADMIN_API_KEY"
 ```
 

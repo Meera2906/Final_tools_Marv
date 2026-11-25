@@ -8,11 +8,11 @@ This guide documents manual verification procedures and concrete `curl -i` comma
 
 Run the local development server:
 
-```bash
+```powershell
 npm run dev
 ```
 
-By default, the server starts at `http://localhost:3000` (or `http://localhost:5173`).
+By default, the server starts at `http://localhost:8080` (or `http://localhost:5173`).
 
 ---
 
@@ -22,8 +22,8 @@ By default, the server starts at `http://localhost:3000` (or `http://localhost:5
 
 Verify that visiting an active, unexpired, unprotected short link returns an immediate server-side HTTP 302 redirect with no client-side navigation.
 
-```bash
-curl -i http://localhost:3000/go/<ACTIVE_CODE>
+```powershell
+curl.exe -i "http://localhost:8080/go/<ACTIVE_CODE>"
 ```
 
 **Expected Response:**
@@ -44,11 +44,11 @@ _Note: The response body is empty or minimal redirect payload; no JavaScript or 
 
 Verify that every 302 redirect durably increments the click counter by exactly 1.
 
-```bash
+```powershell
 # Before request: check click count via creator info API or Supabase SQL
 # SELECT code, clicks FROM short_links WHERE code = '<ACTIVE_CODE>';
 
-curl -i http://localhost:3000/go/<ACTIVE_CODE>
+curl.exe -i "http://localhost:8080/go/<ACTIVE_CODE>"
 
 # After request:
 # SELECT code, clicks FROM short_links WHERE code = '<ACTIVE_CODE>';
@@ -61,8 +61,8 @@ curl -i http://localhost:3000/go/<ACTIVE_CODE>
 
 Verify that querying an unknown slug returns HTTP 404 with noindex header.
 
-```bash
-curl -i http://localhost:3000/go/non-existent-code
+```powershell
+curl.exe -i "http://localhost:8080/go/non-existent-code"
 ```
 
 **Expected Response:**
@@ -81,15 +81,15 @@ _Renders the "Link not found" shell with a link back to the shortener tool._
 
 Verify that inactive or policy-violating links return HTTP 410 Gone with noindex header.
 
-```bash
+```powershell
 # Expired link
-curl -i http://localhost:3000/go/<EXPIRED_CODE>
+curl.exe -i "http://localhost:8080/go/<EXPIRED_CODE>"
 
 # Disabled link
-curl -i http://localhost:3000/go/<DISABLED_CODE>
+curl.exe -i "http://localhost:8080/go/<DISABLED_CODE>"
 
 # Blocked link / blocked domain
-curl -i http://localhost:3000/go/<BLOCKED_CODE>
+curl.exe -i "http://localhost:8080/go/<BLOCKED_CODE>"
 ```
 
 **Expected Response:**
@@ -108,9 +108,9 @@ _Renders the corresponding 410 shell ("This short link has expired" / "This link
 
 Verify that password-protected links do not disclose the destination URL until unlocked.
 
-```bash
+```powershell
 # Step 1: Initial GET renders password prompt (200 OK)
-curl -i http://localhost:3000/go/<PASSWORD_CODE>
+curl.exe -i "http://localhost:8080/go/<PASSWORD_CODE>"
 ```
 
 **Expected Initial Response:**
@@ -119,23 +119,23 @@ curl -i http://localhost:3000/go/<PASSWORD_CODE>
 - Header: `X-Robots-Tag: noindex`
 - Body: Form containing `<input type="hidden" name="action" value="unlock" />` and password input. Target URL is completely absent from HTML and JSON script tags.
 
-```bash
+```powershell
 # Step 2: Native form POST with incorrect password
-curl -i -X POST http://localhost:3000/go/<PASSWORD_CODE> \
-  -H "Host: localhost:3000" \
-  -H "Origin: http://localhost:3000" \
-  -F "action=unlock" \
+curl.exe -i -X POST "http://localhost:8080/go/<PASSWORD_CODE>" `
+  -H "Host: localhost:8080" `
+  -H "Origin: http://localhost:8080" `
+  -F "action=unlock" `
   -F "password=wrong-password"
 ```
 
 **Expected Response:** `401 Unauthorized` with `X-Robots-Tag: noindex`.
 
-```bash
+```powershell
 # Step 3: Native form POST with correct password
-curl -i -X POST http://localhost:3000/go/<PASSWORD_CODE> \
-  -H "Host: localhost:3000" \
-  -H "Origin: http://localhost:3000" \
-  -F "action=unlock" \
+curl.exe -i -X POST "http://localhost:8080/go/<PASSWORD_CODE>" `
+  -H "Host: localhost:8080" `
+  -H "Origin: http://localhost:8080" `
+  -F "action=unlock" `
   -F "password=<CORRECT_PASSWORD>"
 ```
 
@@ -155,9 +155,9 @@ X-Robots-Tag: noindex
 
 Verify that a link flagged for community review renders the interstitial warning with destination preview and requires explicit continuation.
 
-```bash
+```powershell
 # Step 1: Initial GET renders interstitial notice
-curl -i http://localhost:3000/go/<FLAGGED_CODE>
+curl.exe -i "http://localhost:8080/go/<FLAGGED_CODE>"
 ```
 
 **Expected Initial Response:**
@@ -167,11 +167,11 @@ curl -i http://localhost:3000/go/<FLAGGED_CODE>
 - Shows destination URL preview.
 - Includes `<form method="post"><input type="hidden" name="action" value="continue" /></form>`.
 
-```bash
+```powershell
 # Step 2: Native form POST to continue to destination
-curl -i -X POST http://localhost:3000/go/<FLAGGED_CODE> \
-  -H "Host: localhost:3000" \
-  -H "Origin: http://localhost:3000" \
+curl.exe -i -X POST "http://localhost:8080/go/<FLAGGED_CODE>" `
+  -H "Host: localhost:8080" `
+  -H "Origin: http://localhost:8080" `
   -F "action=continue"
 ```
 
@@ -191,10 +191,10 @@ X-Robots-Tag: noindex
 
 Verify that cross-site POST submissions are blocked by origin validation.
 
-```bash
-curl -i -X POST http://localhost:3000/go/<ANY_CODE> \
-  -H "Host: localhost:3000" \
-  -H "Origin: https://malicious-attacker.com" \
+```powershell
+curl.exe -i -X POST "http://localhost:8080/go/<ANY_CODE>" `
+  -H "Host: localhost:8080" `
+  -H "Origin: https://malicious-attacker.com" `
   -F "action=continue"
 ```
 
@@ -213,9 +213,11 @@ Forbidden: Cross-site request rejected
 
 Verify that exceeding rate limits returns HTTP 429 with `Retry-After`.
 
-```bash
-# Execute rapid resolution loop
-for i in {1..130}; do curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/go/<ACTIVE_CODE>; done
+```powershell
+# Execute rapid resolution loop (run concurrently or in PowerShell jobs to hit 120 req/60s window)
+1..130 | ForEach-Object {
+  Start-Job -ScriptBlock { curl.exe -s -o NUL -w "%{http_code}`n" "http://localhost:8080/go/<ACTIVE_CODE>" }
+} | Receive-Job -Wait -AutoRemoveJob
 ```
 
 **Expected Response on Limit Exceeded:**
@@ -232,14 +234,14 @@ X-Robots-Tag: noindex
 
 Verify that requests from unverified / untrusted IPs receive a signed reporting cookie with `HttpOnly; Secure; SameSite=Lax`.
 
-```bash
-curl -i http://localhost:3000/go/<ANY_CODE>
+```powershell
+curl.exe -i "http://localhost:8080/go/<ANY_CODE>"
 ```
 
 **Expected Header:**
 
 ```http
-Set-Cookie: __Host-mrv_rep=...; Path=/; Max-Age=7200; HttpOnly; Secure; SameSite=Lax
+Set-Cookie: _mrv_rep_sess=...; Path=/; Max-Age=7200; HttpOnly; Secure; SameSite=Lax
 ```
 
 ---
@@ -248,10 +250,10 @@ Set-Cookie: __Host-mrv_rep=...; Path=/; Max-Age=7200; HttpOnly; Secure; SameSite
 
 All admin endpoints run on dedicated server HTTP route handlers under `/api/admin/links/*`. They are strictly machine-to-machine, protected by the `x-admin-api-key` header, and return `Cache-Control: no-store` on all responses.
 
-Set the admin API key environment variable in your terminal session for testing:
+Set the admin API key environment variable in your PowerShell session for testing (also ensure `ADMIN_API_KEY` is set in `.env.local` and the dev server was restarted):
 
-```bash
-export ADMIN_API_KEY="your-local-test-admin-key"
+```powershell
+$env:ADMIN_API_KEY = "your-local-test-admin-key"
 ```
 
 ---
@@ -260,12 +262,12 @@ export ADMIN_API_KEY="your-local-test-admin-key"
 
 Verify that missing or incorrect API keys return HTTP 401 with generic error message.
 
-```bash
+```powershell
 # Missing key
-curl -i http://localhost:3000/api/admin/links/reports
+curl.exe -i "http://localhost:8080/api/admin/links/reports"
 
 # Wrong key
-curl -i http://localhost:3000/api/admin/links/reports \
+curl.exe -i "http://localhost:8080/api/admin/links/reports" `
   -H "x-admin-api-key: invalid-key"
 ```
 
@@ -285,14 +287,14 @@ Cache-Control: no-store
 
 List abuse reports with optional status filtering and pagination (limit clamped to 100).
 
-```bash
+```powershell
 # List all reports (default 50)
-curl -i http://localhost:3000/api/admin/links/reports \
-  -H "x-admin-api-key: $ADMIN_API_KEY"
+curl.exe -i "http://localhost:8080/api/admin/links/reports" `
+  -H "x-admin-api-key: $env:ADMIN_API_KEY"
 
 # Filter by open status with pagination
-curl -i "http://localhost:3000/api/admin/links/reports?status=open&limit=20&offset=0" \
-  -H "x-admin-api-key: $ADMIN_API_KEY"
+curl.exe -i "http://localhost:8080/api/admin/links/reports?status=open&limit=20&offset=0" `
+  -H "x-admin-api-key: $env:ADMIN_API_KEY"
 ```
 
 **Expected Response:**
@@ -326,14 +328,11 @@ Cache-Control: no-store
 
 Transition an abuse report's moderation status to `reviewed`, `actioned`, or `dismissed`.
 
-```bash
-curl -i -X PATCH http://localhost:3000/api/admin/links/reports \
-  -H "x-admin-api-key: $ADMIN_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "reportId": "11111111-2222-3333-4444-555555555555",
-    "status": "reviewed"
-  }'
+```powershell
+curl.exe -i -X PATCH "http://localhost:8080/api/admin/links/reports" `
+  -H "x-admin-api-key: $env:ADMIN_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{\"reportId\":\"11111111-2222-3333-4444-555555555555\",\"status\":\"reviewed\"}'
 ```
 
 **Expected Response:**
@@ -352,25 +351,18 @@ Cache-Control: no-store
 
 Change a link's moderation status. When restoring to `active`, the database runs `admin_restore_link()` to transactionally reset status and resolve open reports.
 
-```bash
+```powershell
 # Block a link and add its domain to the global blocklist
-curl -i -X POST http://localhost:3000/api/admin/links/status \
-  -H "x-admin-api-key: $ADMIN_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "code": "suspicious-slug",
-    "status": "blocked",
-    "addDomain": true
-  }'
+curl.exe -i -X POST "http://localhost:8080/api/admin/links/status" `
+  -H "x-admin-api-key: $env:ADMIN_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{\"code\":\"suspicious-slug\",\"status\":\"blocked\",\"addDomain\":true}'
 
 # Restore a flagged or blocked link back to active
-curl -i -X POST http://localhost:3000/api/admin/links/status \
-  -H "x-admin-api-key: $ADMIN_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "code": "suspicious-slug",
-    "status": "active"
-  }'
+curl.exe -i -X POST "http://localhost:8080/api/admin/links/status" `
+  -H "x-admin-api-key: $env:ADMIN_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{\"code\":\"suspicious-slug\",\"status\":\"active\"}'
 ```
 
 **Expected Response:**
@@ -389,23 +381,20 @@ Cache-Control: no-store
 
 Add, remove, and inspect domains in the global target blocklist.
 
-```bash
+```powershell
 # Add a blocked domain
-curl -i -X POST http://localhost:3000/api/admin/links/blocked-domains \
-  -H "x-admin-api-key: $ADMIN_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "domain": "phishing-gang.net",
-    "source": "admin_investigation"
-  }'
+curl.exe -i -X POST "http://localhost:8080/api/admin/links/blocked-domains" `
+  -H "x-admin-api-key: $env:ADMIN_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{\"domain\":\"phishing-gang.net\",\"source\":\"admin_investigation\"}'
 
 # List blocked domains
-curl -i http://localhost:3000/api/admin/links/blocked-domains \
-  -H "x-admin-api-key: $ADMIN_API_KEY"
+curl.exe -i "http://localhost:8080/api/admin/links/blocked-domains" `
+  -H "x-admin-api-key: $env:ADMIN_API_KEY"
 
 # Remove a blocked domain
-curl -i -X DELETE "http://localhost:3000/api/admin/links/blocked-domains?domain=phishing-gang.net" \
-  -H "x-admin-api-key: $ADMIN_API_KEY"
+curl.exe -i -X DELETE "http://localhost:8080/api/admin/links/blocked-domains?domain=phishing-gang.net" `
+  -H "x-admin-api-key: $env:ADMIN_API_KEY"
 ```
 
 **Expected Response (Add):**
@@ -426,7 +415,7 @@ The following procedures verify the interactive client-side creator management d
 
 ### Scenario 15: Create Short Link and Receive Creator Management Key
 
-1. Start development server (`npm run dev`) and navigate to `http://localhost:3000/link-shortener`.
+1. Start development server (`npm run dev`) and navigate to `http://localhost:8080/link-shortener`.
 2. In the URL field, paste `https://example.com/test-landing`.
 3. Click **"Shorten Now"**.
 4. **Expected UI State:**
@@ -443,7 +432,7 @@ The following procedures verify the interactive client-side creator management d
 
 ### Scenario 16: Local Link Management Dashboard (`CreatorLinkManager`)
 
-1. Scroll down on `http://localhost:3000/link-shortener` to **"Manage Your Short Links"**.
+1. Scroll down on `http://localhost:8080/link-shortener` to **"Manage Your Short Links"**.
 2. **Expected Card Display:**
    - Header shows `/go/:code` with an external link icon and quick **Copy** button.
    - Target destination URL displayed (`https://example.com/test-landing`).
@@ -465,13 +454,13 @@ The following procedures verify the interactive client-side creator management d
    - Success alert appears: _"Link successfully disabled."_
    - Status badge switches to **Disabled** in neutral gray.
    - Button text switches to **"Enable Link"**.
-3. In a new browser tab, navigate to `http://localhost:3000/go/:code`.
+3. In a new browser tab, navigate to `http://localhost:8080/go/:code`.
    - **Expected:** Server returns `HTTP 410 Gone` rendering the _"This link has been disabled by its creator"_ page.
 4. Back in the manager tab, click **"Enable Link"**.
    - Status badge switches back to **Active**.
-5. Re-visit `http://localhost:3000/go/:code` in the second tab.
+5. Re-visit `http://localhost:8080/go/:code` in the second tab.
    - **Expected:** Server returns `HTTP 302 Found` redirecting immediately to `https://example.com/test-landing`.
-6. Return to `http://localhost:3000/link-shortener` and click the **Refresh** icon on the card:
+6. Return to `http://localhost:8080/link-shortener` and click the **Refresh** icon on the card:
    - **Clicks** counter updates from `0` to `1`.
    - **Last Clicked** updates from `Never` to the recent timestamp.
 
@@ -483,7 +472,7 @@ The following procedures verify the interactive client-side creator management d
    - Sub-panel opens with password input.
    - Enter `my-secret-123` and click **"Set Password"**.
    - Alert displays: _"Password updated."_
-2. Navigate to `http://localhost:3000/go/:code`:
+2. Navigate to `http://localhost:8080/go/:code`:
    - Password prompt form is displayed (`HTTP 200`). Destination URL is not disclosed.
    - Enter `my-secret-123` and submit. Browser redirects (`HTTP 302`) to target destination.
 3. In the link card, click **"Password"** -> **"Remove Password"**:

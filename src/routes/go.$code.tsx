@@ -14,6 +14,11 @@ import {
 import { resolveShortLink, reportLink } from "@/lib/links.functions";
 
 export const Route = createFileRoute("/go/$code")({
+  staleTime: 0,
+  gcTime: 0,
+  headers: () => ({
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+  }),
   loader: async ({ params }: { params: { code: string } }) => {
     const res = await resolveShortLink({ data: { code: params.code } });
 
@@ -53,6 +58,18 @@ export const Route = createFileRoute("/go/$code")({
   ),
   server: {
     handlers: {
+      GET: async ({ next }) => {
+        const result = await next();
+        const { getResponseStatus } = await import("@tanstack/react-start/server");
+        const desiredStatus = getResponseStatus();
+        if (desiredStatus && desiredStatus !== 200 && result.response.status === 200) {
+          return new Response(result.response.body, {
+            status: desiredStatus,
+            headers: result.response.headers,
+          });
+        }
+        return result;
+      },
       POST: async ({ request, params }: { request: Request; params: { code: string } }) => {
         const { handleGoPostService } = await import("@/lib/links/service.server");
         return handleGoPostService(request, params.code);
@@ -131,16 +148,17 @@ function Go() {
 
     const unlock = async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
+      const form = e.currentTarget;
       setBusy(true);
       setMsg(null);
       try {
         const r = await resolveShortLink({ data: { code, password: pw } });
         if (r.status === "ok") {
           // Native form submission to let the server emit genuine 302 redirect
-          e.currentTarget.submit();
+          form.submit();
         } else if (r.status === "pending_review") {
           // Flagged link unlocked: submit form to show interstitial
-          e.currentTarget.submit();
+          form.submit();
         } else if (r.status === "wrong") {
           setMsg("Wrong password. Please try again.");
         } else if (r.status === "rate_limited") {
@@ -150,7 +168,7 @@ function Go() {
         }
       } catch {
         // Fallback to native POST
-        e.currentTarget.submit();
+        form.submit();
       } finally {
         setBusy(false);
       }

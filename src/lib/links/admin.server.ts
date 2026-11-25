@@ -106,13 +106,11 @@ export async function updateReportService(
 
   const { reportId, status } = parsed.data;
   const db = await getAdminDb(deps);
-  const now = deps?.now ? deps.now() : new Date();
 
   const { error } = await db
     .from("link_reports")
     .update({
       status,
-      reviewed_at: now.toISOString(),
     })
     .eq("id", reportId);
 
@@ -398,7 +396,7 @@ export async function listBlockedDomainsService(
   const { data, error } = await db
     .from("blocked_domains")
     .select("*")
-    .order("created_at", { ascending: false });
+    .order("added_at", { ascending: false });
 
   if (error) {
     return jsonResponse(

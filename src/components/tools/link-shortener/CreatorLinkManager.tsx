@@ -274,8 +274,10 @@ function CreatorLinkCard({
       if (!res.ok) {
         setActionErr(formatLinkError(res.error));
       } else {
-        setStats((prev) => (prev ? { ...prev, status: nextStatus } : prev));
-        setActionMsg(`Link successfully ${nextStatus === "active" ? "re-enabled" : "disabled"}.`);
+        setStats((prev) => (prev ? { ...prev, status: res.link.status } : prev));
+        setActionMsg(
+          `Link successfully ${res.link.status === "active" ? "re-enabled" : "disabled"}.`,
+        );
         setTimeout(() => setActionMsg(null), 3000);
       }
     } catch {
@@ -320,7 +322,14 @@ function CreatorLinkCard({
       if (!res.ok) {
         setActionErr(formatLinkError(res.error));
       } else {
-        setStats((prev) => (prev ? { ...prev, expiresAt } : prev));
+        setStats((prev) =>
+          prev
+            ? {
+                ...prev,
+                expiresAt: res.link.expiresAt,
+              }
+            : prev,
+        );
         setShowExpiryEdit(false);
         setActionMsg("Expiration updated.");
         setTimeout(() => setActionMsg(null), 3000);
@@ -375,7 +384,7 @@ function CreatorLinkCard({
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const shortUrl = `${origin}/go/${item.code}`;
-  const badge = getStatusBadge(stats?.status ?? "loading");
+  const badge = getStatusBadge(stats?.status ?? "loading", stats?.expiresAt);
 
   return (
     <article

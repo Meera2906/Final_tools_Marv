@@ -122,6 +122,18 @@ describe("Link Shortener UI Helpers", () => {
       expect(b.canReenable).toBe(false);
     });
 
+    it("returns Expired when active link has expiresAt in the past", () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const b = getStatusBadge("active", past);
+      expect(b.label).toBe("Expired");
+      expect(b.canDisable).toBe(false);
+      expect(b.canReenable).toBe(false);
+
+      const future = new Date(Date.now() + 60_000).toISOString();
+      const active = getStatusBadge("active", future);
+      expect(active.label).toBe("Active");
+    });
+
     it("returns correct metadata for disabled", () => {
       const b = getStatusBadge("disabled");
       expect(b.label).toBe("Disabled");

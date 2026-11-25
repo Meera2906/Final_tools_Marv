@@ -297,6 +297,7 @@ export async function resolveShortLinkService(
 
   if (!row) {
     await trySetResponseStatus(404);
+    await trySetResponseHeader("Cache-Control", "no-store");
     await trySetResponseHeader("X-Robots-Tag", "noindex");
     return { status: "missing" };
   }
@@ -304,11 +305,13 @@ export async function resolveShortLinkService(
   // 3. Status checks
   if (row.status === "blocked") {
     await trySetResponseStatus(410);
+    await trySetResponseHeader("Cache-Control", "no-store");
     await trySetResponseHeader("X-Robots-Tag", "noindex");
     return { status: "blocked" };
   }
   if (row.status === "disabled") {
     await trySetResponseStatus(410);
+    await trySetResponseHeader("Cache-Control", "no-store");
     await trySetResponseHeader("X-Robots-Tag", "noindex");
     return { status: "disabled" };
   }
@@ -316,6 +319,7 @@ export async function resolveShortLinkService(
   // 4. Dynamic expiry check
   if (row.expires_at && new Date(row.expires_at) <= now) {
     await trySetResponseStatus(410);
+    await trySetResponseHeader("Cache-Control", "no-store");
     await trySetResponseHeader("X-Robots-Tag", "noindex");
     return { status: "expired" };
   }
